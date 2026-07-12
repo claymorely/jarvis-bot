@@ -64,9 +64,10 @@ client.on("messageCreate", async (message) => {
   const content = message.content.trim();
   const lower = content.toLowerCase();
 
+  // Triggers anywhere in the message — start, middle, or end
   const triggered =
     message.mentions.has(client.user) ||
-    TRIGGERS.some((t) => lower.startsWith(t));
+    TRIGGERS.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
   if (!triggered) return;
 
   const last = cooldowns.get(message.author.id) || 0;
@@ -95,7 +96,6 @@ client.on("messageCreate", async (message) => {
         messages,
       });
     } catch (e) {
-      // one retry after a short pause
       await new Promise((r) => setTimeout(r, 1500));
       completion = await groq.chat.completions.create({
         model: "llama-3.3-70b-versatile",
