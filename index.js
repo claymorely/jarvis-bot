@@ -3,8 +3,9 @@ import Groq from "groq-sdk";
 
 const TRIGGERS = ["jarvis", "big j"];
 const ALLOWED_CHANNEL_ID = "182529759400427520";
+const MODEL = "llama-3.1-8b-instant";
 const MAX_REPLY = 600;
-const COOLDOWN_MS = 8000;
+const COOLDOWN_MS = 15000;
 
 const SYSTEM_PROMPT = `
 You are Jarvis, a Discord bot living in Claymore's server.
@@ -64,12 +65,13 @@ client.on("messageCreate", async (message) => {
   const content = message.content.trim();
   const lower = content.toLowerCase();
 
-  // Triggers anywhere in the message — start, middle, or end
+  // Name anywhere in the message — start, middle, or end
   const triggered =
     message.mentions.has(client.user) ||
     TRIGGERS.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
   if (!triggered) return;
 
+  // Per-user cooldown — silently ignore spam
   const last = cooldowns.get(message.author.id) || 0;
   const now = Date.now();
   if (now - last < COOLDOWN_MS) return;
@@ -90,15 +92,16 @@ client.on("messageCreate", async (message) => {
     let completion;
     try {
       completion = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
+        model: MODEL,
         max_tokens: 200,
         temperature: 0.8,
         messages,
       });
     } catch (e) {
+      if (e?.status === 429) throw e; // never retry a rate limit
       await new Promise((r) => setTimeout(r, 1500));
       completion = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
+        model: MODEL,
         max_tokens: 200,
         temperature: 0.8,
         messages,
@@ -123,11 +126,10 @@ client.on("messageCreate", async (message) => {
     await message.reply(reply);
   } catch (err) {
     console.error("Groq error:", err?.status, err?.message);
-    await message.reply(
-      err?.status === 429
-        ? "gimme a sec, i'm getting spammed"
-        : "something broke on my end, try again in a sec"
-    );
+    if (err?.status !== 429) {
+      await message.reply("something broke on my end, try again in a sec");
+    }
+    // on 429: stay silent instead of spamming "i'm getting spammed"
   }
 });
 
