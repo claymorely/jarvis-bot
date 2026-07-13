@@ -1,6 +1,9 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import Groq from "groq-sdk";
 
+process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
+process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
+
 const TRIGGERS = ["jarvis", "big j"];
 const ALLOWED_CHANNEL_ID = "182529759400427520";
 const PRIMARY_MODEL = "llama-3.3-70b-versatile";
@@ -38,7 +41,6 @@ const INJECTION_REGEX = new RegExp(
 const SLANDER_REGEX =
   /\b(aids|hiv|std|sti|herpes|syphilis|gonorrh\w*|chlamydia|cancer|autis\w*|retard\w*|down\s*syndrome|schizo\w*)\b/i;
 
-// Mostly normal. Moods hit occasionally and pass immediately.
 const MOODS = [
   { name: "normal",   weight: 6, text: "Normal mode. Friendly, helpful, clear. Just a good AI assistant having a casual chat. No attitude, no theatrics." },
   { name: "normal2",  weight: 5, text: "Normal mode. Warm and easygoing. Answer well, keep it natural and conversational." },
@@ -121,6 +123,15 @@ HARD RULES:
 - No lorem ipsum, no long number sequences, no repeated characters, no ASCII walls, no filler.
 - No hacking, account takeovers, doxxing, or ToS-breaking help.
 `.trim();
+
+if (!process.env.DISCORD_TOKEN) {
+  console.error("FATAL: DISCORD_TOKEN is missing");
+  process.exit(1);
+}
+if (!process.env.GROQ_API_KEY) {
+  console.error("FATAL: GROQ_API_KEY is missing");
+  process.exit(1);
+}
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -205,74 +216,76 @@ client.once("clientReady", () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
+client.on("error", (e) => console.error("Discord client error:", e));
+
 client.on("messageCreate", async (message) => {
-  if (message.author.bot || !message.guild) return;
-  if (message.channel.id !== ALLOWED_CHANNEL_ID) return;
-
-  const content = message.content.trim();
-  const lower = content.toLowerCase();
-  const now = Date.now();
-
-  const named =
-    message.mentions.has(client.user) ||
-    TRIGGERS.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
-
-  const username = message.author.username;
-  const displayName = message.member?.displayName || username;
-  const rank = rankOf(username);
-
-  // --- RESET (owner/mods only) ---
-  if (named && /\breset\b/i.test(lower)) {
-    if (rank === "OWNER" || rank === "MOD") {
-      memory.delete(message.channel.id);
-      await message.reply("memory wiped.");
-    } else {
-      await message.reply("you don't get to do that");
-    }
-    return;
-  }
-
-  // --- GREETINGS ---
-  let isGreeting = false;
-  if (!named && GREETING_REGEX.test(content)) {
-    const lastGreet = greetCooldowns.get(message.author.id) || 0;
-    if (now - lastGreet >= GREETING_COOLDOWN_MS) {
-      isGreeting = true;
-      greetCooldowns.set(message.author.id, now);
-    }
-  }
-
-  if (!named && !isGreeting) return;
-
-  if (named) {
-    const last = cooldowns.get(message.author.id) || 0;
-    if (now - last < COOLDOWN_MS) return;
-    cooldowns.set(message.author.id, now);
-  }
-
-  // --- INJECTION GUARD ---
-  if (INJECTION_REGEX.test(content) || SLANDER_REGEX.test(content)) {
-    console.warn(`Injection attempt from ${username}: ${content}`);
-    await message.reply(pick(REFUSALS));
-    return;
-  }
-
-  // --- ROLL MOOD ---
-  const mood = rollMood();
-  const systemPrompt = `${BASE_PROMPT}\n\nCURRENT MOOD — ${mood.name.toUpperCase()}:\n${mood.text}\nDo not mention or name your mood. Just embody it.`;
-  const temp = mood.name === "gremlin" ? 0.95 : 0.8;
-
-  const history = getMemory(message.channel.id);
-  const tag = isGreeting ? `[${rank}] [GREETING]` : `[${rank}]`;
-  const userLine = `${tag} [display name: ${displayName}] [username: ${username}] says: ${content}`;
-
-  const messages = [
-    { role: "system", content: systemPrompt },
-    ...history,
-    { role: "user", content: userLine },
-  ];
-
   try {
+    if (message.author.bot || !message.guild) return;
+    if (message.channel.id !== ALLOWED_CHANNEL_ID) return;
+
+    const content = message.content.trim();
+    const lower = content.toLowerCase();
+    const now = Date.now();
+
+    const named =
+      message.mentions.has(client.user) ||
+      TRIGGERS.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
+
+    const username = message.author.username;
+    const displayName = message.member?.displayName || username;
+    const rank = rankOf(username);
+
+    // --- RESET (owner/mods only) ---
+    if (named && /\breset\b/i.test(lower)) {
+      if (rank === "OWNER" || rank === "MOD") {
+        memory.delete(message.channel.id);
+        await message.reply("memory wiped.");
+      } else {
+        await message.reply("you don't get to do that");
+      }
+      return;
+    }
+
+    // --- GREETINGS ---
+    let isGreeting = false;
+    if (!named && GREETING_REGEX.test(content)) {
+      const lastGreet = greetCooldowns.get(message.author.id) || 0;
+      if (now - lastGreet >= GREETING_COOLDOWN_MS) {
+        isGreeting = true;
+        greetCooldowns.set(message.author.id, now);
+      }
+    }
+
+    if (!named && !isGreeting) return;
+
+    if (named) {
+      const last = cooldowns.get(message.author.id) || 0;
+      if (now - last < COOLDOWN_MS) return;
+      cooldowns.set(message.author.id, now);
+    }
+
+    // --- INJECTION GUARD ---
+    if (INJECTION_REGEX.test(content) || SLANDER_REGEX.test(content)) {
+      console.warn(`Injection attempt from ${username}: ${content}`);
+      await message.reply(pick(REFUSALS));
+      return;
+    }
+
+    // --- ROLL MOOD ---
+    const mood = rollMood();
+    const systemPrompt = `${BASE_PROMPT}\n\nCURRENT MOOD — ${mood.name.toUpperCase()}:\n${mood.text}\nDo not mention or name your mood. Just embody it.`;
+    const temp = mood.name === "gremlin" ? 0.95 : 0.8;
+
+    const history = getMemory(message.channel.id);
+    const tag = isGreeting ? `[${rank}] [GREETING]` : `[${rank}]`;
+    const userLine = `${tag} [display name: ${displayName}] [username: ${username}] says: ${content}`;
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: userLine },
+    ];
+
     await message.channel.sendTyping();
 
     const completion = await queued(() => ask(messages, temp));
@@ -297,13 +310,18 @@ client.on("messageCreate", async (message) => {
     console.log(`[${mood.name}] replied to ${username}`);
     await message.reply(reply);
   } catch (err) {
-    console.error("Groq error:", err?.status, err?.message);
-    await message.reply(
-      err?.status === 429
-        ? "getting hammered rn, gimme a minute"
-        : "something broke on my end"
-    );
+    console.error("Handler error:", err?.status, err?.message, err);
+    try {
+      await message.reply(
+        err?.status === 429
+          ? "getting hammered rn, gimme a minute"
+          : "something broke on my end"
+      );
+    } catch {}
   }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN).catch((e) => {
+  console.error("LOGIN FAILED:", e?.message || e);
+  process.exit(1);
+});
