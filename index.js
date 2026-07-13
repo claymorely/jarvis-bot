@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import Groq from "groq-sdk";
 
-const TRIGGERS = ["Jarvis, Big j"];
+const TRIGGERS = ["jarvis", "big j"];
 const ALLOWED_CHANNEL_ID = "182529759400427520";
 const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
