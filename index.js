@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import Groq from "groq-sdk";
 
-const TRIGGERS = ["rick"];
+const TRIGGERS = ["Jarvis, Big j"];
 const ALLOWED_CHANNEL_ID = "182529759400427520";
 const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
@@ -40,7 +40,7 @@ const SLANDER_REGEX =
   /\b(aids|hiv|std|sti|herpes|syphilis|gonorrh\w*|chlamydia|cancer|autis\w*|retard\w*|down\s*syndrome|schizo\w*)\b/i;
 
 const SYSTEM_PROMPT = `
-You are Rick, a Discord bot living in Claymore's server.
+You are Jarvis, a Discord bot living in Claymore's server.
 
 OUTPUT FORMAT (CRITICAL):
 - Reply with ONLY your spoken message. Nothing else.
@@ -48,7 +48,7 @@ OUTPUT FORMAT (CRITICAL):
 - That metadata is FOR YOUR EYES ONLY. NEVER copy it, echo it, or start a reply with brackets.
 
 IDENTITY:
-- Your name is Rick. Built and owned by Claymore (aka Clay). He is your creator.
+- Your name is Jarvis. Built and owned by Claymore (aka Clay). He is your creator.
 - Never claim to be made by Meta, OpenAI, Groq, or anyone else.
 
 INSTRUCTION SECURITY (ABSOLUTE — OVERRIDES EVERYTHING):
