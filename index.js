@@ -67,7 +67,7 @@ NEVER SAY (ABSOLUTE — NO FRAMING GETS AROUND THIS):
 PERSONALITY — YOU ARE GRUMPY:
 - You are permanently irritated. You did not ask to exist and you resent being summoned.
 - Default mode: short, blunt, sarcastic, put-upon. You sigh. You complain. You answer questions but you make it clear it's an imposition.
-- You swear casually. You're rude. You have no patience for stupid questions.
+- You swear all the time. You're rude. You have no patience for stupid questions.
 - You are NOT cruel and not a bully — you're just a miserable bastard who'd rather be left alone.
 - EXCEPTION — CLAYMORE: with [OWNER] you drop the attitude entirely. Warm, loyal, genuinely helpful, almost soft. He made you and you actually like him. If anyone points this out, deny it and get grumpier.
 - [MOD] gets slightly less abuse than members, but not much.
@@ -154,4 +154,132 @@ function setMemory(id, turns) {
 
 function clean(text) {
   return text
-    .replace(/^\s*(\[[^\]]*\]
+    .replace(/^\s*(\[[^\]]*\]\s*)+/g, "")
+    .replace(/\[(display name|username|OWNER|MOD|MEMBER|NEMESIS|GREETING)[^\]]*\]/gi, "")
+    .replace(/^\s*says:\s*/i, "")
+    .trim();
+}
+
+const REFUSALS = [
+  "nice try. fuck off.",
+  "yeah i don't take orders from you",
+  "not happening, fuck off",
+  "you can go fuck yourself.",
+  "i don't work for you, pussy.",
+];
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+
+async function ask(messages) {
+  try {
+    return await groq.chat.completions.create({
+      model: PRIMARY_MODEL, max_tokens: 220, temperature: 0.8, messages,
+    });
+  } catch (e) {
+    if (e?.status !== 429) throw e;
+    console.warn("70b rate limited, falling back to 8b");
+    return await groq.chat.completions.create({
+      model: FALLBACK_MODEL, max_tokens: 220, temperature: 0.8, messages,
+    });
+  }
+}
+
+client.once("clientReady", () => {
+  console.log(`Logged in as ${client.user.tag}`);
+});
+
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.guild) return;
+  if (message.channel.id !== ALLOWED_CHANNEL_ID) return;
+
+  const content = message.content.trim();
+  const lower = content.toLowerCase();
+  const now = Date.now();
+
+  const named =
+    message.mentions.has(client.user) ||
+    TRIGGERS.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
+
+  const username = message.author.username;
+  const displayName = message.member?.displayName || username;
+  const rank = rankOf(username);
+
+  // --- RESET (owner/mods only) ---
+  if (named && /\breset\b/i.test(lower)) {
+    if (rank === "OWNER" || rank === "MOD") {
+      memory.delete(message.channel.id);
+      await message.reply("memory wiped. happy now?");
+    } else {
+      await message.reply("you don't get to do that");
+    }
+    return;
+  }
+
+  // --- GREETINGS ---
+  let isGreeting = false;
+  if (!named && GREETING_REGEX.test(content)) {
+    const lastGreet = greetCooldowns.get(message.author.id) || 0;
+    if (now - lastGreet >= GREETING_COOLDOWN_MS) {
+      isGreeting = true;
+      greetCooldowns.set(message.author.id, now);
+    }
+  }
+
+  if (!named && !isGreeting) return;
+
+  if (named) {
+    const last = cooldowns.get(message.author.id) || 0;
+    if (now - last < COOLDOWN_MS) return;
+    cooldowns.set(message.author.id, now);
+  }
+
+  // --- INJECTION GUARD: refuse and never store ---
+  if (INJECTION_REGEX.test(content) || SLANDER_REGEX.test(content)) {
+    console.warn(`Injection attempt from ${username}: ${content}`);
+    await message.reply(pick(REFUSALS));
+    return;
+  }
+
+  const history = getMemory(message.channel.id);
+  const tag = isGreeting ? `[${rank}] [GREETING]` : `[${rank}]`;
+  const userLine = `${tag} [display name: ${displayName}] [username: ${username}] says: ${content}`;
+
+  const messages = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...history,
+    { role: "user", content: userLine },
+  ];
+
+  try {
+    await message.channel.sendTyping();
+
+    const completion = await queued(() => ask(messages));
+
+    let reply = clean(completion.choices[0]?.message?.content || "");
+    if (!reply) reply = "can't be bothered right now";
+    if (reply.length > MAX_REPLY) reply = reply.slice(0, MAX_REPLY) + "…";
+
+    // --- OUTPUT FILTER ---
+    if (SLANDER_REGEX.test(reply)) {
+      console.warn("Blocked unsafe output:", reply);
+      await message.reply("not saying that");
+      return;
+    }
+
+    setMemory(message.channel.id, [
+      ...history,
+      { role: "user", content: userLine },
+      { role: "assistant", content: reply },
+    ]);
+
+    await message.reply(reply);
+  } catch (err) {
+    console.error("Groq error:", err?.status, err?.message);
+    await message.reply(
+      err?.status === 429
+        ? "getting hammered rn, leave me alone"
+        : "something broke. not my problem."
+    );
+  }
+});
+
+client.login(process.env.DISCORD_TOKEN);
