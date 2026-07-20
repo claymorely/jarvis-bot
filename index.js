@@ -288,6 +288,12 @@ async function ask(messages) {
   }
 }
 
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
 // --- WELCOME CARD ---
 // Builds a Welcomer-style image: solid color background, circular avatar,
 // name + member-count text. Colors picked from a fixed pool, same idea as
@@ -348,7 +354,7 @@ async function generateWelcomeCard(displayName, avatarUrl, memberNumber) {
   const textX = avatarX + avatarSize + 40;
   ctx.fillText(`Welcome ${displayName}`, textX, height / 2 - 10);
   ctx.font = "bold 30px sans-serif";
-  ctx.fillText(`to Clay's Hangout — you're member #${memberNumber}!`, textX, height / 2 + 35);
+  ctx.fillText(`to Clay's Hangout — you are the ${ordinal(memberNumber)} member!`, textX, height / 2 + 35);
 
   return canvas.toBuffer("image/png");
 }
@@ -505,9 +511,9 @@ client.on("guildMemberAdd", async (member) => {
 
     // Friday-voiced caption, generated the same way as her normal replies.
     // Falls back to a plain line if Groq fails so a new member always gets a card.
-    let caption = `Welcome, ${displayName} — glad you're here.`;
+    let caption = `Welcome, ${displayName} — you're the ${ordinal(memberNumber)} member, glad you're here.`;
     try {
-      const userLine = `[SYSTEM] A new member named ${displayName} just joined the server. Write a short, one-sentence welcome in your own voice. Do not use brackets or metadata in your reply.`;
+      const userLine = `[SYSTEM] A new member named ${displayName} just joined the server. They are the ${ordinal(memberNumber)} member. Write ONE short welcome sentence in your own voice that naturally mentions they're the ${ordinal(memberNumber)} member. Do NOT introduce yourself, do NOT say your name, do NOT explain who you are or what you do — everyone here already knows you. Just greet them like you'd greet someone walking into a room. Do not use brackets or metadata in your reply.`;
       const completion = await queued(() =>
         ask([{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: userLine }])
       );
