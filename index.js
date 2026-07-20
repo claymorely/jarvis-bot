@@ -1,12 +1,15 @@
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, AttachmentBuilder } from "discord.js";
 import Groq from "groq-sdk";
 import fs from "fs";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
 
 const TRIGGERS = ["friday"];
 const ALLOWED_CHANNEL_IDS = ["182529759400427520", "1519101258076782665"]; // main + staff-only
+const WELCOME_CHANNEL_ID = "1525824995882700800";
+const WELCOME_CARD_COLORS = ["#43B581", "#B08D57", "#FFFFFF", "#5865F2", "#EB459E", "#FAA61A"];
 const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
 const MAX_REPLY = 600;
@@ -20,7 +23,7 @@ const GLOBAL_MAX_CALLS = 15;
 let globalCallTimestamps = [];
 
 const OWNER_IDS = ["182529468215066624"];
-const MOD_USERNAMES = ["bearcrafter"];
+const MOD_IDS = ["473613773630865443"]; // Bearcrafter (username: aiorosmza)
 
 const LOG_PATH = "./friday-violations.log";
 function logViolation(kind, username, content) {
@@ -165,6 +168,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
   ],
 });
 
@@ -186,7 +190,7 @@ function queued(fn) {
 
 function rankOf(author) {
   if (OWNER_IDS.includes(author.id)) return "OWNER";
-  if (MOD_USERNAMES.includes(author.username.toLowerCase())) return "MOD";
+  if (MOD_IDS.includes(author.id)) return "MOD";
   return "MEMBER";
 }
 
@@ -234,7 +238,7 @@ function getMemory(id) {
 }
 
 function setMemory(id, turns) {
-  memory.set(id, { turns: turns.slice(-10), updated: Date.now() });
+  memory.set(id, { turns: turns.slice(-40), updated: Date.now() });
 }
 
 function clean(text) {
@@ -282,6 +286,71 @@ async function ask(messages) {
       model: FALLBACK_MODEL, max_tokens: 220, temperature: 0.8, messages,
     });
   }
+}
+
+// --- WELCOME CARD ---
+// Builds a Welcomer-style image: solid color background, circular avatar,
+// name + member-count text. Colors picked from a fixed pool, same idea as
+// most welcome-card bots. Text is drawn from a name that's already been
+// through sanitizeName() upstream, so nothing untrusted reaches the canvas.
+async function generateWelcomeCard(displayName, avatarUrl, memberNumber) {
+  const width = 900;
+  const height = 300;
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+
+  const bg = WELCOME_CARD_COLORS[Math.floor(Math.random() * WELCOME_CARD_COLORS.length)];
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  // rounded-rect clip so the card has soft corners like Welcomer's cards
+  const radius = 24;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(radius, 0);
+  ctx.arcTo(width, 0, width, height, radius);
+  ctx.arcTo(width, height, 0, height, radius);
+  ctx.arcTo(0, height, 0, 0, radius);
+  ctx.arcTo(0, 0, width, 0, radius);
+  ctx.closePath();
+  ctx.clip();
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+
+  // avatar circle
+  const avatarSize = 200;
+  const avatarX = 50;
+  const avatarY = (height - avatarSize) / 2;
+  try {
+    const avatar = await loadImage(avatarUrl);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(avatar, avatarX, avatarY, avatarSize, avatarSize);
+    ctx.restore();
+  } catch (e) {
+    console.error("Failed to load avatar for welcome card:", e.message);
+  }
+
+  ctx.strokeStyle = "#FFFFFF";
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // text: dark or light depending on background, so it stays readable
+  const textColor = bg === "#FFFFFF" || bg === "#FAA61A" ? "#111111" : "#FFFFFF";
+  ctx.fillStyle = textColor;
+  ctx.font = "bold 34px sans-serif";
+  const textX = avatarX + avatarSize + 40;
+  ctx.fillText(`Welcome ${displayName}`, textX, height / 2 - 10);
+  ctx.font = "bold 30px sans-serif";
+  ctx.fillText(`to Clay's Hangout — you're member #${memberNumber}!`, textX, height / 2 + 35);
+
+  return canvas.toBuffer("image/png");
 }
 
 client.once("clientReady", () => {
@@ -415,6 +484,44 @@ client.on("messageCreate", async (message) => {
           : "Something broke on my end."
       );
     } catch {}
+  }
+});
+
+client.on("guildMemberAdd", async (member) => {
+  try {
+    const channel = member.guild.channels.cache.get(WELCOME_CHANNEL_ID);
+    if (!channel) {
+      console.error("Welcome channel not found:", WELCOME_CHANNEL_ID);
+      return;
+    }
+
+    const rawDisplayName = member.displayName || member.user.username;
+    const displayName = sanitizeName(rawDisplayName, "a new member");
+    const memberNumber = member.guild.memberCount;
+    const avatarUrl = member.user.displayAvatarURL({ extension: "png", size: 256 });
+
+    const cardBuffer = await generateWelcomeCard(displayName, avatarUrl, memberNumber);
+    const attachment = new AttachmentBuilder(cardBuffer, { name: "welcome.png" });
+
+    // Friday-voiced caption, generated the same way as her normal replies.
+    // Falls back to a plain line if Groq fails so a new member always gets a card.
+    let caption = `Welcome, ${displayName} — glad you're here.`;
+    try {
+      const userLine = `[SYSTEM] A new member named ${displayName} just joined the server. Write a short, one-sentence welcome in your own voice. Do not use brackets or metadata in your reply.`;
+      const completion = await queued(() =>
+        ask([{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: userLine }])
+      );
+      const generated = clean(completion.choices[0]?.message?.content || "");
+      if (generated && !SLANDER_REGEX.test(generated) && !CREEP_REGEX.test(generated)) {
+        caption = generated.length > MAX_REPLY ? generated.slice(0, MAX_REPLY) + "…" : generated;
+      }
+    } catch (e) {
+      console.error("Welcome caption generation failed, using fallback:", e.message);
+    }
+
+    await channel.send({ content: caption, files: [attachment] });
+  } catch (err) {
+    console.error("guildMemberAdd handler error:", err);
   }
 });
 
