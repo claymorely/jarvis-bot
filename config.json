@@ -1,0 +1,23 @@
+{
+  "triggers": ["friday"],
+  "allowedChannelIds": ["182529759400427520", "1519101258076782665"],
+  "welcomeChannelId": "1525824995882700800",
+  "ownerIds": ["182529468215066624"],
+  "modIds": ["473613773630865443"],
+  "pingBlockUserIds": ["182529468215066624"],
+  "cooldownMs": 8000,
+  "globalWindowMs": 10000,
+  "globalMaxCalls": 15,
+  "muteDefaultMinutes": 5,
+  "muteMaxMinutes": 1440,
+  "lastMessagesDefault": 20,
+  "roleWhitelist": {
+    "iron": "REPLACE_WITH_IRON_ROLE_ID",
+    "gold": "REPLACE_WITH_GOLD_ROLE_ID",
+    "emerald": "REPLACE_WITH_EMERALD_ROLE_ID",
+    "diamond": "REPLACE_WITH_DIAMOND_ROLE_ID",
+    "ruby": "REPLACE_WITH_RUBY_ROLE_ID",
+    "netherite": "REPLACE_WITH_NETHERITE_ROLE_ID",
+    "gif perms": "REPLACE_WITH_GIFPERMS_ROLE_ID"
+  }
+}
