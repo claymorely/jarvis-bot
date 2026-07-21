@@ -169,7 +169,7 @@ const lastBotMessageIds = new Map(); // channelId -> messageId, for "delete your
 
 // Use instead of message.reply() so we always know Friday's most recent
 // message in a channel — needed for the delete-last-message command.
-async function reply(message, text) {
+async function sendReply(message, text) {
   const sent = await message.reply(text);
   lastBotMessageIds.set(message.channel.id, sent.id);
   return sent;
@@ -380,12 +380,12 @@ client.on("messageCreate", async (message) => {
     // --- OWNER ON/OFF TOGGLE ---
     if (named && rank === "OWNER" && /\bfriday\s+off\b/i.test(lower)) {
       fridayEnabled = false;
-      await reply(message, "Going quiet. Say \"friday on\" to bring me back.");
+      await sendReply(message, "Going quiet. Say \"friday on\" to bring me back.");
       return;
     }
     if (named && rank === "OWNER" && /\bfriday\s+on\b/i.test(lower)) {
       fridayEnabled = true;
-      await reply(message, "Back online.");
+      await sendReply(message, "Back online.");
       return;
     }
     if (!fridayEnabled) return;
@@ -394,9 +394,9 @@ client.on("messageCreate", async (message) => {
     if (named && /\breset\b/i.test(lower)) {
       if (rank === "OWNER" || rank === "MOD") {
         memory.delete(message.channel.id);
-        await reply(message, "Memory cleared.");
+        await sendReply(message, "Memory cleared.");
       } else {
-        await reply(message, "Not your call to make.");
+        await sendReply(message, "Not your call to make.");
       }
       return;
     }
@@ -416,7 +416,7 @@ client.on("messageCreate", async (message) => {
     if (isStaff && /\bdelete\b/i.test(lower) && /(your|previous|last)\s+message/i.test(lower)) {
       const lastId = lastBotMessageIds.get(message.channel.id);
       if (!lastId) {
-        await reply(message, "I don't have a recent message of mine in this channel to delete.");
+        await sendReply(message, "I don't have a recent message of mine in this channel to delete.");
         return;
       }
       try {
@@ -424,7 +424,7 @@ client.on("messageCreate", async (message) => {
         await target.delete();
         lastBotMessageIds.delete(message.channel.id);
       } catch (e) {
-        await reply(message, "Couldn't delete it — might already be gone, or check my Manage Messages permission.");
+        await sendReply(message, "Couldn't delete it — might already be gone, or check my Manage Messages permission.");
       }
       return;
     }
@@ -437,9 +437,9 @@ client.on("messageCreate", async (message) => {
       if (CHAT_EDITABLE_KEYS.includes(key)) {
         config[key] = value;
         saveConfig();
-        await reply(message, `Set ${key} to ${value}.`);
+        await sendReply(message, `Set ${key} to ${value}.`);
       } else {
-        await reply(message, `Can't edit "${key}" through chat — that one needs a direct file edit.`);
+        await sendReply(message, `Can't edit "${key}" through chat — that one needs a direct file edit.`);
       }
       return;
     }
@@ -456,9 +456,9 @@ client.on("messageCreate", async (message) => {
       try {
         const targetMember = await message.guild.members.fetch(targetId);
         await targetMember.timeout(minutes * 60 * 1000, `Muted via Friday by ${username}`);
-        await reply(message, `Muted <@${targetId}> for ${minutes} minute(s).`);
+        await sendReply(message, `Muted <@${targetId}> for ${minutes} minute(s).`);
       } catch (e) {
-        await reply(message, "Couldn't do that — check my Timeout Members permission.");
+        await sendReply(message, "Couldn't do that — check my Timeout Members permission.");
       }
       return;
     }
@@ -474,22 +474,22 @@ client.on("messageCreate", async (message) => {
       );
       if (roleKey) {
         if (!targetId) {
-          await reply(message, "Give it to who? Tag them or say \"me\".");
+          await sendReply(message, "Give it to who? Tag them or say \"me\".");
           return;
         }
         const role = message.guild.roles.cache.find(
           (r) => r.name.toLowerCase() === roleKey.toLowerCase()
         );
         if (!role) {
-          await reply(message, `Can't find a role named "${roleKey}" in this server — check the exact spelling in Discord.`);
+          await sendReply(message, `Can't find a role named "${roleKey}" in this server — check the exact spelling in Discord.`);
           return;
         }
         try {
           const targetMember = await message.guild.members.fetch(targetId);
           await targetMember.roles.add(role.id);
-          await reply(message, `Gave <@${targetId}> the ${roleKey} role.`);
+          await sendReply(message, `Gave <@${targetId}> the ${roleKey} role.`);
         } catch (e) {
-          await reply(message, "Couldn't do that — check my Manage Roles permission.");
+          await sendReply(message, "Couldn't do that — check my Manage Roles permission.");
         }
         return;
       }
@@ -506,7 +506,7 @@ client.on("messageCreate", async (message) => {
           for (const m of fetched.values()) {
             try { await m.reactions.removeAll(); } catch {}
           }
-          await reply(message, `Cleared all reactions from the last ${count} messages.`);
+          await sendReply(message, `Cleared all reactions from the last ${count} messages.`);
         } else if (targetId) {
           const uid = targetId;
           for (const m of fetched.values()) {
@@ -517,19 +517,19 @@ client.on("messageCreate", async (message) => {
               } catch {}
             }
           }
-          await reply(message, `Removed <@${uid}>'s reactions from the last ${count} messages.`);
+          await sendReply(message, `Removed <@${uid}>'s reactions from the last ${count} messages.`);
         } else {
-          await reply(message, "Tell me whose reactions, or say \"all\".");
+          await sendReply(message, "Tell me whose reactions, or say \"all\".");
         }
       } catch (e) {
-        await reply(message, "Couldn't do that — check my Manage Messages permission.");
+        await sendReply(message, "Couldn't do that — check my Manage Messages permission.");
       }
       return;
     }
 
     // --- OWNER-ONLY HARDCODED TRIGGER: "friday internet" ---
     if (rank === "OWNER" && /\bfriday\s+internet\b/i.test(lower)) {
-      await reply(message, "fuck you internet");
+      await sendReply(message, "fuck you internet");
       return;
     }
 
@@ -538,7 +538,7 @@ client.on("messageCreate", async (message) => {
     if (rank === "OWNER" && relayMatch) {
       const toSay = relayMatch[1].trim();
       if (toSay) {
-        await reply(message, toSay);
+        await sendReply(message, toSay);
         return;
       }
     }
@@ -562,20 +562,20 @@ client.on("messageCreate", async (message) => {
     // --- CREEP GUARD ---
     if (CREEP_REGEX.test(content)) {
       logViolation("CREEP", username, content);
-      await reply(message, pick(CREEP_REPLIES));
+      await sendReply(message, pick(CREEP_REPLIES));
       return;
     }
 
     // --- INJECTION GUARD ---
     if (INJECTION_REGEX.test(content) || SLANDER_REGEX.test(content)) {
       logViolation("INJECTION/SLANDER", username, content);
-      await reply(message, pick(REFUSALS));
+      await sendReply(message, pick(REFUSALS));
       return;
     }
 
     // --- GLOBAL RATE LIMIT ---
     if (!globalRateLimitOk()) {
-      await reply(message, "Too many requests right now, give it a few seconds.");
+      await sendReply(message, "Too many requests right now, give it a few seconds.");
       return;
     }
 
@@ -599,7 +599,7 @@ client.on("messageCreate", async (message) => {
 
     if (SLANDER_REGEX.test(reply) || CREEP_REGEX.test(reply)) {
       logViolation("BLOCKED_OUTPUT", "friday", reply);
-      await reply(message, "Not saying that.");
+      await sendReply(message, "Not saying that.");
       return;
     }
 
@@ -609,11 +609,11 @@ client.on("messageCreate", async (message) => {
       { role: "assistant", content: reply },
     ]);
 
-    await reply(message, reply);
+    await sendReply(message, reply);
   } catch (err) {
     console.error("Handler error:", err?.status, err?.message, err);
     try {
-      await reply(message, 
+      await sendReply(message, 
         err?.status === 429
           ? "Getting a lot of requests right now, give me a sec."
           : "Something broke on my end."
