@@ -37,7 +37,7 @@ const DEFAULT_CONFIG = {
   muteDefaultMinutes: 5,
   muteMaxMinutes: 1440,
   lastMessagesDefault: 20,
-  roleWhitelist: {},
+  roleWhitelist: [],
 };
 // Keys editable via the "friday set X to Y" chat command — numeric only.
 // Anything not in this list (role whitelist, IDs, system prompt) must be
@@ -165,6 +165,15 @@ const client = new Client({
 // Cost/context-limit tradeoffs of this were flagged and accepted.
 const memory = new Map();
 const cooldowns = new Map();
+const lastBotMessageIds = new Map(); // channelId -> messageId, for "delete your last message"
+
+// Use instead of message.reply() so we always know Friday's most recent
+// message in a channel — needed for the delete-last-message command.
+async function reply(message, text) {
+  const sent = await message.reply(text);
+  lastBotMessageIds.set(message.channel.id, sent.id);
+  return sent;
+}
 
 let fridayEnabled = true;
 
@@ -371,12 +380,12 @@ client.on("messageCreate", async (message) => {
     // --- OWNER ON/OFF TOGGLE ---
     if (named && rank === "OWNER" && /\bfriday\s+off\b/i.test(lower)) {
       fridayEnabled = false;
-      await message.reply("Going quiet. Say \"friday on\" to bring me back.");
+      await reply(message, "Going quiet. Say \"friday on\" to bring me back.");
       return;
     }
     if (named && rank === "OWNER" && /\bfriday\s+on\b/i.test(lower)) {
       fridayEnabled = true;
-      await message.reply("Back online.");
+      await reply(message, "Back online.");
       return;
     }
     if (!fridayEnabled) return;
@@ -385,9 +394,9 @@ client.on("messageCreate", async (message) => {
     if (named && /\breset\b/i.test(lower)) {
       if (rank === "OWNER" || rank === "MOD") {
         memory.delete(message.channel.id);
-        await message.reply("Memory cleared.");
+        await reply(message, "Memory cleared.");
       } else {
-        await message.reply("Not your call to make.");
+        await reply(message, "Not your call to make.");
       }
       return;
     }
@@ -399,9 +408,26 @@ client.on("messageCreate", async (message) => {
     cooldowns.set(message.author.id, now);
 
     const mentionMatch = content.match(/<@!?(\d+)>/);
-    const referredToSelf = /\b(me|myself)\b/i.test(lower);
+    const referredToSelf = /\b(me|myself|my)\b/i.test(lower);
     const targetId = mentionMatch ? mentionMatch[1] : (referredToSelf ? message.author.id : null);
     const isStaff = rank === "OWNER" || rank === "MOD";
+
+    // --- DELETE LAST MESSAGE: "friday delete your last/previous message" (owner/mod only) ---
+    if (isStaff && /\bdelete\b/i.test(lower) && /(your|previous|last)\s+message/i.test(lower)) {
+      const lastId = lastBotMessageIds.get(message.channel.id);
+      if (!lastId) {
+        await reply(message, "I don't have a recent message of mine in this channel to delete.");
+        return;
+      }
+      try {
+        const target = await message.channel.messages.fetch(lastId);
+        await target.delete();
+        lastBotMessageIds.delete(message.channel.id);
+      } catch (e) {
+        await reply(message, "Couldn't delete it — might already be gone, or check my Manage Messages permission.");
+      }
+      return;
+    }
 
     // --- LIVE CONFIG EDIT: "friday set X to Y" (owner/mod only, numeric keys only) ---
     const setMatch = content.match(/\bset\s+(\w+)\s+(?:to\s+)?(-?\d+(?:\.\d+)?)/i);
@@ -411,9 +437,9 @@ client.on("messageCreate", async (message) => {
       if (CHAT_EDITABLE_KEYS.includes(key)) {
         config[key] = value;
         saveConfig();
-        await message.reply(`Set ${key} to ${value}.`);
+        await reply(message, `Set ${key} to ${value}.`);
       } else {
-        await message.reply(`Can't edit "${key}" through chat — that one needs a direct file edit.`);
+        await reply(message, `Can't edit "${key}" through chat — that one needs a direct file edit.`);
       }
       return;
     }
@@ -430,34 +456,40 @@ client.on("messageCreate", async (message) => {
       try {
         const targetMember = await message.guild.members.fetch(targetId);
         await targetMember.timeout(minutes * 60 * 1000, `Muted via Friday by ${username}`);
-        await message.reply(`Muted <@${targetId}> for ${minutes} minute(s).`);
+        await reply(message, `Muted <@${targetId}> for ${minutes} minute(s).`);
       } catch (e) {
-        await message.reply("Couldn't do that — check my Timeout Members permission.");
+        await reply(message, "Couldn't do that — check my Timeout Members permission.");
       }
       return;
     }
 
     // --- ROLE GIVE: "friday give @user/me <role> role" (owner/mod only, whitelist only) ---
+    // config.roleWhitelist is just a list of allowed role NAMES — that list is the
+    // security boundary, not an ID mapping. The actual role is looked up live by
+    // name each time, so no manual ID copying needed. If Discord doesn't have a
+    // role with that exact name, she says so instead of guessing.
     if (isStaff && /\bgive\b/i.test(lower)) {
-      const roleKey = Object.keys(config.roleWhitelist).find((k) =>
+      const roleKey = config.roleWhitelist.find((k) =>
         new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
       );
       if (roleKey) {
         if (!targetId) {
-          await message.reply("Give it to who? Tag them or say \"me\".");
+          await reply(message, "Give it to who? Tag them or say \"me\".");
           return;
         }
-        const roleId = config.roleWhitelist[roleKey];
-        if (!roleId || roleId.startsWith("REPLACE_WITH_")) {
-          await message.reply(`The ${roleKey} role isn't set up yet — the role ID in config.json is still a placeholder.`);
+        const role = message.guild.roles.cache.find(
+          (r) => r.name.toLowerCase() === roleKey.toLowerCase()
+        );
+        if (!role) {
+          await reply(message, `Can't find a role named "${roleKey}" in this server — check the exact spelling in Discord.`);
           return;
         }
         try {
           const targetMember = await message.guild.members.fetch(targetId);
-          await targetMember.roles.add(roleId);
-          await message.reply(`Gave <@${targetId}> the ${roleKey} role.`);
+          await targetMember.roles.add(role.id);
+          await reply(message, `Gave <@${targetId}> the ${roleKey} role.`);
         } catch (e) {
-          await message.reply("Couldn't do that — check my Manage Roles permission and the role ID in config.");
+          await reply(message, "Couldn't do that — check my Manage Roles permission.");
         }
         return;
       }
@@ -474,7 +506,7 @@ client.on("messageCreate", async (message) => {
           for (const m of fetched.values()) {
             try { await m.reactions.removeAll(); } catch {}
           }
-          await message.reply(`Cleared all reactions from the last ${count} messages.`);
+          await reply(message, `Cleared all reactions from the last ${count} messages.`);
         } else if (targetId) {
           const uid = targetId;
           for (const m of fetched.values()) {
@@ -485,19 +517,19 @@ client.on("messageCreate", async (message) => {
               } catch {}
             }
           }
-          await message.reply(`Removed <@${uid}>'s reactions from the last ${count} messages.`);
+          await reply(message, `Removed <@${uid}>'s reactions from the last ${count} messages.`);
         } else {
-          await message.reply("Tell me whose reactions, or say \"all\".");
+          await reply(message, "Tell me whose reactions, or say \"all\".");
         }
       } catch (e) {
-        await message.reply("Couldn't do that — check my Manage Messages permission.");
+        await reply(message, "Couldn't do that — check my Manage Messages permission.");
       }
       return;
     }
 
     // --- OWNER-ONLY HARDCODED TRIGGER: "friday internet" ---
     if (rank === "OWNER" && /\bfriday\s+internet\b/i.test(lower)) {
-      await message.reply("fuck you internet");
+      await reply(message, "fuck you internet");
       return;
     }
 
@@ -506,28 +538,44 @@ client.on("messageCreate", async (message) => {
     if (rank === "OWNER" && relayMatch) {
       const toSay = relayMatch[1].trim();
       if (toSay) {
-        await message.reply(toSay);
+        await reply(message, toSay);
         return;
       }
+    }
+
+    // --- ANTI-HALLUCINATION GUARD ---
+    // If a staff member's message sounds like an action command (uses a
+    // moderation-style verb) but didn't match any handler above, refuse
+    // explicitly instead of letting it fall through to the AI — the AI has
+    // no way to know a command doesn't exist and will confidently pretend
+    // it did the thing. This is the fix for Friday claiming to delete
+    // messages, update roles, etc. that never actually happened.
+    const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take away|revoke|update|reload)\b/i;
+    if (isStaff && ACTION_VERBS.test(lower)) {
+      await reply(
+        message,
+        "I don't have a command for that phrasing. I can: mute @user for X minutes, give @user <role> role, remove [@user's/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
+      );
+      return;
     }
 
     // --- CREEP GUARD ---
     if (CREEP_REGEX.test(content)) {
       logViolation("CREEP", username, content);
-      await message.reply(pick(CREEP_REPLIES));
+      await reply(message, pick(CREEP_REPLIES));
       return;
     }
 
     // --- INJECTION GUARD ---
     if (INJECTION_REGEX.test(content) || SLANDER_REGEX.test(content)) {
       logViolation("INJECTION/SLANDER", username, content);
-      await message.reply(pick(REFUSALS));
+      await reply(message, pick(REFUSALS));
       return;
     }
 
     // --- GLOBAL RATE LIMIT ---
     if (!globalRateLimitOk()) {
-      await message.reply("Too many requests right now, give it a few seconds.");
+      await reply(message, "Too many requests right now, give it a few seconds.");
       return;
     }
 
@@ -551,7 +599,7 @@ client.on("messageCreate", async (message) => {
 
     if (SLANDER_REGEX.test(reply) || CREEP_REGEX.test(reply)) {
       logViolation("BLOCKED_OUTPUT", "friday", reply);
-      await message.reply("Not saying that.");
+      await reply(message, "Not saying that.");
       return;
     }
 
@@ -561,11 +609,11 @@ client.on("messageCreate", async (message) => {
       { role: "assistant", content: reply },
     ]);
 
-    await message.reply(reply);
+    await reply(message, reply);
   } catch (err) {
     console.error("Handler error:", err?.status, err?.message, err);
     try {
-      await message.reply(
+      await reply(message, 
         err?.status === 429
           ? "Getting a lot of requests right now, give me a sec."
           : "Something broke on my end."
