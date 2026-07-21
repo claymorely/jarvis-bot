@@ -444,19 +444,37 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- MUTE / TIMEOUT: "friday mute @user for X minutes" (owner/mod only) ---
+    // --- MUTE / TIMEOUT: "friday mute @user for X minutes/seconds/hours" (owner/mod only) ---
     if (isStaff && /\bmute\b/i.test(lower) && targetId) {
-      const durMatch = content.match(/(\d+)\s*(minute|min|hour|hr)/i);
-      let minutes = config.muteDefaultMinutes;
+      const durMatch = content.match(/(\d+)\s*(second|sec|minute|min|hour|hr)/i);
+      let durationMs = config.muteDefaultMinutes * 60 * 1000;
       if (durMatch) {
-        minutes = parseInt(durMatch[1], 10);
-        if (/hour|hr/i.test(durMatch[2])) minutes *= 60;
+        const amount = parseInt(durMatch[1], 10);
+        const unit = durMatch[2].toLowerCase();
+        if (unit.startsWith("sec")) durationMs = amount * 1000;
+        else if (unit.startsWith("hour") || unit.startsWith("hr")) durationMs = amount * 60 * 60 * 1000;
+        else durationMs = amount * 60 * 1000; // minutes
       }
-      minutes = Math.min(minutes, config.muteMaxMinutes);
+      const maxMs = config.muteMaxMinutes * 60 * 1000;
+      durationMs = Math.min(durationMs, maxMs);
       try {
         const targetMember = await message.guild.members.fetch(targetId);
-        await targetMember.timeout(minutes * 60 * 1000, `Muted via Friday by ${username}`);
-        await sendReply(message, `Muted <@${targetId}> for ${minutes} minute(s).`);
+        await targetMember.timeout(durationMs, `Muted via Friday by ${username}`);
+        const seconds = Math.round(durationMs / 1000);
+        const label = seconds < 60 ? `${seconds} second(s)` : `${Math.round(seconds / 60)} minute(s)`;
+        await sendReply(message, `Muted <@${targetId}> for ${label}.`);
+      } catch (e) {
+        await sendReply(message, "Couldn't do that — check my Timeout Members permission.");
+      }
+      return;
+    }
+
+    // --- UNMUTE: "friday unmute @user" / "friday remove timeout from @user" (owner/mod only) ---
+    if (isStaff && /\b(unmute|remove\s+timeout|remove\s+mute)\b/i.test(lower) && targetId) {
+      try {
+        const targetMember = await message.guild.members.fetch(targetId);
+        await targetMember.timeout(null, `Unmuted via Friday by ${username}`);
+        await sendReply(message, `Removed the timeout on <@${targetId}>.`);
       } catch (e) {
         await sendReply(message, "Couldn't do that — check my Timeout Members permission.");
       }
