@@ -1,7 +1,21 @@
 import { Client, GatewayIntentBits, AttachmentBuilder } from "discord.js";
 import Groq from "groq-sdk";
 import fs from "fs";
-import { createCanvas, loadImage } from "@napi-rs/canvas";
+import path from "path";
+import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
+
+// Bundled font — more reliable than relying on the host OS having fonts
+// installed. Drop a .ttf file in a `fonts/` folder next to this file and
+// point FONT_PATH at it. Falls back to sans-serif if it fails to load,
+// so the bot won't crash, but text may render invisible without a real font.
+const FONT_PATH = "./Inter-Bold.ttf";
+const FONT_FAMILY = "WelcomeFont";
+try {
+  GlobalFonts.registerFromPath(path.resolve(FONT_PATH), FONT_FAMILY);
+  console.log("Registered welcome card font:", FONT_PATH);
+} catch (e) {
+  console.error("Failed to register font, falling back to sans-serif:", e.message);
+}
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
@@ -350,10 +364,10 @@ async function generateWelcomeCard(displayName, avatarUrl, memberNumber) {
   // text: dark or light depending on background, so it stays readable
   const textColor = bg === "#FFFFFF" || bg === "#FAA61A" ? "#111111" : "#FFFFFF";
   ctx.fillStyle = textColor;
-  ctx.font = "bold 34px sans-serif";
+  ctx.font = `bold 34px "${FONT_FAMILY}", sans-serif`;
   const textX = avatarX + avatarSize + 40;
   ctx.fillText(`Welcome ${displayName}`, textX, height / 2 - 10);
-  ctx.font = "bold 30px sans-serif";
+  ctx.font = `bold 30px "${FONT_FAMILY}", sans-serif`;
   ctx.fillText(`to Clay's Hangout — you are the ${ordinal(memberNumber)} member!`, textX, height / 2 + 35);
 
   return canvas.toBuffer("image/png");
