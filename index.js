@@ -493,6 +493,34 @@ client.on("messageCreate", async (message) => {
         }
         return;
       }
+    }
+
+    // --- ROLE TAKE AWAY: "friday take <role> [role] from @user/me" (owner/mod only, whitelist only) ---
+    if (isStaff && /\btake\b/i.test(lower)) {
+      const roleKey = config.roleWhitelist.find((k) =>
+        new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
+      );
+      if (roleKey) {
+        if (!targetId) {
+          await sendReply(message, "Take it from who? Tag them or say \"me\".");
+          return;
+        }
+        const role = message.guild.roles.cache.find(
+          (r) => r.name.toLowerCase() === roleKey.toLowerCase()
+        );
+        if (!role) {
+          await sendReply(message, `Can't find a role named "${roleKey}" in this server — check the exact spelling in Discord.`);
+          return;
+        }
+        try {
+          const targetMember = await message.guild.members.fetch(targetId);
+          await targetMember.roles.remove(role.id);
+          await sendReply(message, `Took the ${roleKey} role from <@${targetId}>.`);
+        } catch (e) {
+          await sendReply(message, "Couldn't do that — check my Manage Roles permission.");
+        }
+        return;
+      }
       // no whitelisted role matched — fall through to normal chat, don't silently ignore "give" in casual talk
     }
 
@@ -550,11 +578,11 @@ client.on("messageCreate", async (message) => {
     // no way to know a command doesn't exist and will confidently pretend
     // it did the thing. This is the fix for Friday claiming to delete
     // messages, update roles, etc. that never actually happened.
-    const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take away|revoke|update|reload)\b/i;
+    const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take|revoke|update|reload)\b/i;
     if (isStaff && ACTION_VERBS.test(lower)) {
       await reply(
         message,
-        "I don't have a command for that phrasing. I can: mute @user for X minutes, give @user <role> role, remove [@user's/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
+        "I don't have a command for that phrasing. I can: mute @user for X minutes, give/take @user <role> role, remove [@user's/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
       );
       return;
     }
