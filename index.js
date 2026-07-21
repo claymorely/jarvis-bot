@@ -399,6 +399,8 @@ client.on("messageCreate", async (message) => {
     cooldowns.set(message.author.id, now);
 
     const mentionMatch = content.match(/<@!?(\d+)>/);
+    const referredToSelf = /\b(me|myself)\b/i.test(lower);
+    const targetId = mentionMatch ? mentionMatch[1] : (referredToSelf ? message.author.id : null);
     const isStaff = rank === "OWNER" || rank === "MOD";
 
     // --- LIVE CONFIG EDIT: "friday set X to Y" (owner/mod only, numeric keys only) ---
@@ -417,7 +419,7 @@ client.on("messageCreate", async (message) => {
     }
 
     // --- MUTE / TIMEOUT: "friday mute @user for X minutes" (owner/mod only) ---
-    if (isStaff && /\bmute\b/i.test(lower) && mentionMatch) {
+    if (isStaff && /\bmute\b/i.test(lower) && targetId) {
       const durMatch = content.match(/(\d+)\s*(minute|min|hour|hr)/i);
       let minutes = config.muteDefaultMinutes;
       if (durMatch) {
@@ -426,26 +428,34 @@ client.on("messageCreate", async (message) => {
       }
       minutes = Math.min(minutes, config.muteMaxMinutes);
       try {
-        const targetMember = await message.guild.members.fetch(mentionMatch[1]);
+        const targetMember = await message.guild.members.fetch(targetId);
         await targetMember.timeout(minutes * 60 * 1000, `Muted via Friday by ${username}`);
-        await message.reply(`Muted <@${mentionMatch[1]}> for ${minutes} minute(s).`);
+        await message.reply(`Muted <@${targetId}> for ${minutes} minute(s).`);
       } catch (e) {
         await message.reply("Couldn't do that — check my Timeout Members permission.");
       }
       return;
     }
 
-    // --- ROLE GIVE: "friday give @user <role> role" (owner/mod only, whitelist only) ---
-    if (isStaff && /\bgive\b/i.test(lower) && mentionMatch) {
+    // --- ROLE GIVE: "friday give @user/me <role> role" (owner/mod only, whitelist only) ---
+    if (isStaff && /\bgive\b/i.test(lower)) {
       const roleKey = Object.keys(config.roleWhitelist).find((k) =>
         new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
       );
       if (roleKey) {
+        if (!targetId) {
+          await message.reply("Give it to who? Tag them or say \"me\".");
+          return;
+        }
         const roleId = config.roleWhitelist[roleKey];
+        if (!roleId || roleId.startsWith("REPLACE_WITH_")) {
+          await message.reply(`The ${roleKey} role isn't set up yet — the role ID in config.json is still a placeholder.`);
+          return;
+        }
         try {
-          const targetMember = await message.guild.members.fetch(mentionMatch[1]);
+          const targetMember = await message.guild.members.fetch(targetId);
           await targetMember.roles.add(roleId);
-          await message.reply(`Gave <@${mentionMatch[1]}> the ${roleKey} role.`);
+          await message.reply(`Gave <@${targetId}> the ${roleKey} role.`);
         } catch (e) {
           await message.reply("Couldn't do that — check my Manage Roles permission and the role ID in config.");
         }
@@ -465,8 +475,8 @@ client.on("messageCreate", async (message) => {
             try { await m.reactions.removeAll(); } catch {}
           }
           await message.reply(`Cleared all reactions from the last ${count} messages.`);
-        } else if (mentionMatch) {
-          const uid = mentionMatch[1];
+        } else if (targetId) {
+          const uid = targetId;
           for (const m of fetched.values()) {
             for (const reaction of m.reactions.cache.values()) {
               try {
