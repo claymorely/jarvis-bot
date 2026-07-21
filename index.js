@@ -598,7 +598,7 @@ client.on("messageCreate", async (message) => {
     // messages, update roles, etc. that never actually happened.
     const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take|revoke|update|reload)\b/i;
     if (isStaff && ACTION_VERBS.test(lower)) {
-      await reply(
+      await sendReply(
         message,
         "I don't have a command for that phrasing. I can: mute @user for X minutes, give/take @user <role> role, remove [@user's/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
       );
