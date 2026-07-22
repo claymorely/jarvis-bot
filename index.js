@@ -357,7 +357,11 @@ client.on("messageCreate", async (message) => {
 
     // --- PING BLOCK: deletes any message mentioning a protected user ID ---
     // Runs server-wide, independent of allowed channels — needs Manage Messages.
-    if (config.pingBlockUserIds.some((id) => message.mentions.users.has(id))) {
+    // Checks the raw message text for a real "<@id>" mention only — NOT
+    // message.mentions.users, which Discord also populates when someone
+    // simply hits "reply" on a message (no visible @ping involved). That
+    // was causing genuine replies to get deleted along with actual pings.
+    if (config.pingBlockUserIds.some((id) => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`))) {
       try {
         await message.delete();
       } catch (e) {
