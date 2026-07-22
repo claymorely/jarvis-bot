@@ -280,6 +280,25 @@ async function ask(messages) {
   }
 }
 
+// Resolves a typed name (not a mention) to a real guild member via Discord's
+// member search — matches display name or username, exact match preferred,
+// otherwise the closest search result. Returns null if nothing found.
+async function resolveMemberByName(guild, name) {
+  if (!name) return null;
+  try {
+    const results = await guild.members.search({ query: name, limit: 5 });
+    const exact = results.find(
+      (m) =>
+        m.displayName.toLowerCase() === name.toLowerCase() ||
+        m.user.username.toLowerCase() === name.toLowerCase()
+    );
+    return exact || results.first() || null;
+  } catch (e) {
+    console.error("Member search failed:", e.message);
+    return null;
+  }
+}
+
 function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
@@ -413,8 +432,29 @@ client.on("messageCreate", async (message) => {
 
     const mentionMatch = content.match(/<@!?(\d+)>/);
     const referredToSelf = /\b(me|myself|my)\b/i.test(lower);
-    const targetId = mentionMatch ? mentionMatch[1] : (referredToSelf ? message.author.id : null);
     const isStaff = rank === "OWNER" || rank === "MOD";
+
+    // Resolves the command's target: mention > "me" > typed name (search).
+    // Returns { id, name } or null. nameHint is the word/phrase to search
+    // for when there's no mention — different commands extract it differently.
+    async function resolveTarget(nameHint) {
+      if (mentionMatch) {
+        try {
+          const m = await message.guild.members.fetch(mentionMatch[1]);
+          return { id: m.id, name: m.displayName };
+        } catch {
+          return { id: mentionMatch[1], name: "that user" };
+        }
+      }
+      if (referredToSelf) {
+        return { id: message.author.id, name: displayName };
+      }
+      if (nameHint) {
+        const m = await resolveMemberByName(message.guild, nameHint);
+        if (m) return { id: m.id, name: m.displayName };
+      }
+      return null;
+    }
 
     // --- DELETE LAST MESSAGE: "friday delete your last/previous message" (owner/mod only) ---
     if (isStaff && /\bdelete\b/i.test(lower) && /(your|previous|last)\s+message/i.test(lower)) {
@@ -448,8 +488,14 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- MUTE / TIMEOUT: "friday mute @user for X minutes/seconds/hours" (owner/mod only) ---
-    if (isStaff && /\bmute\b/i.test(lower) && targetId) {
+    // --- MUTE / TIMEOUT: "friday mute <name> for X minutes/seconds/hours" (owner/mod only) ---
+    if (isStaff && /\bmute\b/i.test(lower)) {
+      const nameHint = (content.match(/\bmute\s+(\S+)/i) || [])[1];
+      const target = await resolveTarget(nameHint);
+      if (!target) {
+        await sendReply(message, "Mute who? Give me a name or say \"me\".");
+        return;
+      }
       const durMatch = content.match(/(\d+)\s*(second|sec|minute|min|hour|hr)/i);
       let durationMs = config.muteDefaultMinutes * 60 * 1000;
       if (durMatch) {
@@ -462,30 +508,36 @@ client.on("messageCreate", async (message) => {
       const maxMs = config.muteMaxMinutes * 60 * 1000;
       durationMs = Math.min(durationMs, maxMs);
       try {
-        const targetMember = await message.guild.members.fetch(targetId);
+        const targetMember = await message.guild.members.fetch(target.id);
         await targetMember.timeout(durationMs, `Muted via Friday by ${username}`);
         const seconds = Math.round(durationMs / 1000);
         const label = seconds < 60 ? `${seconds} second(s)` : `${Math.round(seconds / 60)} minute(s)`;
-        await sendReply(message, `Muted <@${targetId}> for ${label}.`);
+        await sendReply(message, `Muted ${target.name} for ${label}.`);
       } catch (e) {
         await sendReply(message, "Couldn't do that — check my Timeout Members permission.");
       }
       return;
     }
 
-    // --- UNMUTE: "friday unmute @user" / "friday remove timeout from @user" (owner/mod only) ---
-    if (isStaff && /\b(unmute|remove\s+timeout|remove\s+mute)\b/i.test(lower) && targetId) {
+    // --- UNMUTE: "friday unmute <name>" / "friday remove timeout from <name>" (owner/mod only) ---
+    if (isStaff && /\b(unmute|remove\s+timeout|remove\s+mute)\b/i.test(lower)) {
+      const nameHint = (content.match(/\bunmute\s+(\S+)/i) || content.match(/timeout\s+(?:from|on)\s+(\S+)/i) || [])[1];
+      const target = await resolveTarget(nameHint);
+      if (!target) {
+        await sendReply(message, "Unmute who? Give me a name or say \"me\".");
+        return;
+      }
       try {
-        const targetMember = await message.guild.members.fetch(targetId);
+        const targetMember = await message.guild.members.fetch(target.id);
         await targetMember.timeout(null, `Unmuted via Friday by ${username}`);
-        await sendReply(message, `Removed the timeout on <@${targetId}>.`);
+        await sendReply(message, `Removed the timeout on ${target.name}.`);
       } catch (e) {
         await sendReply(message, "Couldn't do that — check my Timeout Members permission.");
       }
       return;
     }
 
-    // --- ROLE GIVE: "friday give @user/me <role> role" (owner/mod only, whitelist only) ---
+    // --- ROLE GIVE: "friday give <name>/me <role> role" (owner/mod only, whitelist only) ---
     // config.roleWhitelist is just a list of allowed role NAMES — that list is the
     // security boundary, not an ID mapping. The actual role is looked up live by
     // name each time, so no manual ID copying needed. If Discord doesn't have a
@@ -495,8 +547,10 @@ client.on("messageCreate", async (message) => {
         new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
       );
       if (roleKey) {
-        if (!targetId) {
-          await sendReply(message, "Give it to who? Tag them or say \"me\".");
+        const nameHint = (content.match(/\bgive\s+(\S+)/i) || [])[1];
+        const target = await resolveTarget(nameHint);
+        if (!target) {
+          await sendReply(message, "Give it to who? Give me a name or say \"me\".");
           return;
         }
         const role = message.guild.roles.cache.find(
@@ -507,9 +561,9 @@ client.on("messageCreate", async (message) => {
           return;
         }
         try {
-          const targetMember = await message.guild.members.fetch(targetId);
+          const targetMember = await message.guild.members.fetch(target.id);
           await targetMember.roles.add(role.id);
-          await sendReply(message, `Gave <@${targetId}> the ${roleKey} role.`);
+          await sendReply(message, `Gave ${target.name} the ${roleKey} role.`);
         } catch (e) {
           await sendReply(message, "Couldn't do that — check my Manage Roles permission.");
         }
@@ -517,14 +571,16 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // --- ROLE TAKE AWAY: "friday take <role> [role] from @user/me" (owner/mod only, whitelist only) ---
+    // --- ROLE TAKE AWAY: "friday take <role> from <name>/me" (owner/mod only, whitelist only) ---
     if (isStaff && /\btake\b/i.test(lower)) {
       const roleKey = config.roleWhitelist.find((k) =>
         new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
       );
       if (roleKey) {
-        if (!targetId) {
-          await sendReply(message, "Take it from who? Tag them or say \"me\".");
+        const nameHint = (content.match(/\bfrom\s+(\S+)/i) || [])[1];
+        const target = await resolveTarget(nameHint);
+        if (!target) {
+          await sendReply(message, "Take it from who? Give me a name or say \"me\".");
           return;
         }
         const role = message.guild.roles.cache.find(
@@ -535,39 +591,41 @@ client.on("messageCreate", async (message) => {
           return;
         }
         try {
-          const targetMember = await message.guild.members.fetch(targetId);
+          const targetMember = await message.guild.members.fetch(target.id);
           await targetMember.roles.remove(role.id);
-          await sendReply(message, `Took the ${roleKey} role from <@${targetId}>.`);
+          await sendReply(message, `Took the ${roleKey} role from ${target.name}.`);
         } catch (e) {
           await sendReply(message, "Couldn't do that — check my Manage Roles permission.");
         }
         return;
       }
-      // no whitelisted role matched — fall through to normal chat, don't silently ignore "give" in casual talk
+      // no whitelisted role matched — fall through to normal chat, don't silently ignore "take" in casual talk
     }
 
     // --- REACTION REMOVAL (owner/mod only) ---
     if (isStaff && /\bremove\b/i.test(lower) && /reaction/i.test(lower)) {
       const countMatch = content.match(/last\s*(\d+)/i);
       const count = countMatch ? parseInt(countMatch[1], 10) : config.lastMessagesDefault;
+      const isAll = /\ball\b/i.test(lower);
+      const nameHint = (content.match(/\bremove\s+(\S+?)'?s?\s+reaction/i) || [])[1];
+      const target = isAll ? null : await resolveTarget(nameHint);
       try {
         const fetched = await message.channel.messages.fetch({ limit: count });
-        if (/\ball\b/i.test(lower)) {
+        if (isAll) {
           for (const m of fetched.values()) {
             try { await m.reactions.removeAll(); } catch {}
           }
           await sendReply(message, `Cleared all reactions from the last ${count} messages.`);
-        } else if (targetId) {
-          const uid = targetId;
+        } else if (target) {
           for (const m of fetched.values()) {
             for (const reaction of m.reactions.cache.values()) {
               try {
                 const users = await reaction.users.fetch();
-                if (users.has(uid)) await reaction.users.remove(uid);
+                if (users.has(target.id)) await reaction.users.remove(target.id);
               } catch {}
             }
           }
-          await sendReply(message, `Removed <@${uid}>'s reactions from the last ${count} messages.`);
+          await sendReply(message, `Removed ${target.name}'s reactions from the last ${count} messages.`);
         } else {
           await sendReply(message, "Tell me whose reactions, or say \"all\".");
         }
@@ -604,7 +662,7 @@ client.on("messageCreate", async (message) => {
     if (isStaff && ACTION_VERBS.test(lower)) {
       await sendReply(
         message,
-        "I don't have a command for that phrasing. I can: mute @user for X minutes, give/take @user <role> role, remove [@user's/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
+        "I don't have a command for that phrasing. I can: mute <name> for X minutes, unmute <name>, give/take <name> <role> role, remove [<name>'s/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
       );
       return;
     }
