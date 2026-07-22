@@ -280,6 +280,36 @@ async function ask(messages) {
   }
 }
 
+// --- MINECRAFT WIKI LOOKUP ---
+// Only triggers on messages that look Minecraft-related, so normal chat
+// stays fast and unaffected. Fetches the real wiki instead of letting the
+// model guess from training data — still not infallible (she can misread
+// the summary), but far more reliable than guessing blind.
+const MINECRAFT_KEYWORDS = /\b(minecraft|redstone|nether|ender|enderman|creeper|zombie|skeleton|villager|crafting|enchant|potion|bedrock|obsidian|diamond|netherite|hopper|piston|command block|mob|biome|dimension|end portal|mace|trident|elytra|totem|beacon|anvil|brewing|smithing|farm(?:ing)?\b.*\b(mc|minecraft)?)\b/i;
+
+async function fetchWikiContext(query) {
+  try {
+    const searchUrl = `https://minecraft.wiki/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=1`;
+    const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(5000) });
+    const searchData = await searchRes.json();
+    const title = searchData?.query?.search?.[0]?.title;
+    if (!title) return null;
+
+    const extractUrl = `https://minecraft.wiki/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(title)}&format=json`;
+    const extractRes = await fetch(extractUrl, { signal: AbortSignal.timeout(5000) });
+    const extractData = await extractRes.json();
+    const pages = extractData?.query?.pages || {};
+    const page = Object.values(pages)[0];
+    const extract = page?.extract;
+    if (!extract) return null;
+
+    return { title, extract: extract.slice(0, 1200) };
+  } catch (e) {
+    console.error("Wiki lookup failed:", e.message);
+    return null;
+  }
+}
+
 // Resolves a typed name (not a mention) to a real guild member via Discord's
 // member search — matches display name or username, exact match preferred,
 // otherwise the closest search result. Returns null if nothing found.
@@ -694,8 +724,20 @@ client.on("messageCreate", async (message) => {
     const messages = [
       { role: "system", content: loadSystemPrompt() },
       ...history,
-      { role: "user", content: userLine },
     ];
+
+    if (MINECRAFT_KEYWORDS.test(lower)) {
+      await message.channel.sendTyping();
+      const wiki = await fetchWikiContext(content);
+      if (wiki) {
+        messages.push({
+          role: "system",
+          content: `[WIKI LOOKUP — "${wiki.title}"]\n${wiki.extract}\n\nUse the above as your source of truth for this question if it's relevant. If it doesn't actually answer what was asked, say you're not sure rather than guessing.`,
+        });
+      }
+    }
+
+    messages.push({ role: "user", content: userLine });
 
     await message.channel.sendTyping();
 
