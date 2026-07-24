@@ -419,7 +419,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    if (!config.allowedChannelIds.includes(message.channel.id)) return;
+    // Channel restriction removed — Friday now responds in every channel.
 
     const rank = rankOf(message.author);
     const username = message.author.username;
