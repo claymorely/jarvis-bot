@@ -682,14 +682,20 @@ client.on("messageCreate", async (message) => {
     }
 
     // --- ANTI-HALLUCINATION GUARD ---
-    // If a staff member's message sounds like an action command (uses a
-    // moderation-style verb) but didn't match any handler above, refuse
-    // explicitly instead of letting it fall through to the AI — the AI has
-    // no way to know a command doesn't exist and will confidently pretend
-    // it did the thing. This is the fix for Friday claiming to delete
-    // messages, update roles, etc. that never actually happened.
-    const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take|revoke|update|reload)\b/i;
-    if (isStaff && ACTION_VERBS.test(lower)) {
+    // Only fires when a staff message BOTH uses a moderation-style verb AND
+    // contains a real command signal (a whitelisted role name, "role",
+    // "reaction", "timeout", a time unit, or "your last/previous message").
+    // Requiring both avoids the earlier bug where ordinary sentences like
+    // "give me the recipe" or "you take orders from me" got blocked just
+    // for containing the word give/take. Without a real signal, it's almost
+    // certainly not a command attempt, so it's let through to normal chat.
+    const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take|revoke|reload)\b/i;
+    const roleSignal = config.roleWhitelist.map((r) => r.replace(/\s+/g, "\\s*")).join("|");
+    const COMMAND_SIGNAL = new RegExp(
+      `\\b(${roleSignal}|role|reaction|timeout|second|minute|hour|(your|last|previous)\\s+message)\\b`,
+      "i"
+    );
+    if (isStaff && ACTION_VERBS.test(lower) && COMMAND_SIGNAL.test(lower)) {
       await sendReply(
         message,
         "I don't have a command for that phrasing. I can: mute <name> for X minutes, unmute <name>, give/take <name> <role> role, remove [<name>'s/all] reactions from the last N messages, delete your last message, set <key> to <value>, or reset."
