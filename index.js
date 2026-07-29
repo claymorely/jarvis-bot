@@ -743,6 +743,15 @@ client.on("messageCreate", async (message) => {
       }
     }
 
+    // --- JIMMY: PLAYFUL & CHARMING ---
+    const JIMMY_ID = "882670933410717717";
+    if (message.author.id === JIMMY_ID) {
+      messages.push({
+        role: "system",
+        content: `[SPECIAL TONE FOR JIMMY: Be playful, witty, and charming with this person. Engage in good-natured banter, make clever jokes at his expense about FabricCraft, tease him about his skill or failures. Be warm, engaging, and fun. flirt with him, call him handsome, Light ribbing is welcome — this is someone you enjoy talking to.]`
+      });
+    }
+
     messages.push({ role: "user", content: userLine });
 
     await message.channel.sendTyping();
