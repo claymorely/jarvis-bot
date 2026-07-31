@@ -3,6 +3,7 @@ import Groq from "groq-sdk";
 import fs from "fs";
 import path from "path";
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
+import { startServerStatus } from "./serverStatus.js";
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
@@ -393,6 +394,7 @@ async function generateWelcomeCard(displayName, avatarUrl, memberNumber) {
 
 client.once("clientReady", () => {
   console.log(`Logged in as ${client.user.tag}`);
+  startServerStatus(client);
 });
 
 client.on("error", (e) => console.error("Discord client error:", e));
@@ -889,7 +891,6 @@ client.on("presenceUpdate", async (oldPresence, newPresence) => {
     }
   }
 });
-
 
 client.login(process.env.DISCORD_TOKEN).catch((e) => {
   console.error("LOGIN FAILED:", e?.message || e);
