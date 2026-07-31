@@ -3,7 +3,6 @@ import Groq from "groq-sdk";
 import fs from "fs";
 import path from "path";
 import { createCanvas, loadImage, GlobalFonts } from "@napi-rs/canvas";
-import { startServerStatus, getOnlinePlayers } from "./serverStatus.js";
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
@@ -394,7 +393,6 @@ async function generateWelcomeCard(displayName, avatarUrl, memberNumber) {
 
 client.once("clientReady", () => {
   console.log(`Logged in as ${client.user.tag}`);
-  startServerStatus(client);
 });
 
 client.on("error", (e) => console.error("Discord client error:", e));
@@ -502,26 +500,6 @@ client.on("messageCreate", async (message) => {
         lastBotMessageIds.delete(message.channel.id);
       } catch (e) {
         await sendReply(message, "Couldn't delete it — might already be gone, or check my Manage Messages permission.");
-      }
-      return;
-    }
-
-    // --- PLAYER LIST: "friday list" or "friday who online" ---
-    if (/\b(list|who(?:'s| is)?\s+online)\b/i.test(lower)) {
-      try {
-        const data = await getOnlinePlayers();
-        if (!data.online) {
-          await sendReply(message, "Server is offline right now.");
-          return;
-        }
-        if (!data.names || data.names.length === 0) {
-          await sendReply(message, `**${data.count}/${data.max}** online, but the server isn't sharing player names.`);
-          return;
-        }
-        const names = data.names.join(", ");
-        await sendReply(message, `**${data.count}/${data.max}** online:\n${names}`);
-      } catch (e) {
-        await sendReply(message, "Couldn't fetch the player list right now.");
       }
       return;
     }
