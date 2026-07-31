@@ -811,7 +811,7 @@ client.on("guildMemberAdd", async (member) => {
     console.error("guildMemberAdd handler error:", err);
   }
 });
-const MUSIC_CHANNEL_ID = "1489967092697399378";
+const MUSIC_CHANNEL_ID = "1532779594195669113";
 const spotifyMessages = new Map();
 const CACHE_TIME = 5 * 60 * 1000;
 
