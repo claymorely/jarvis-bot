@@ -811,7 +811,7 @@ client.on("guildMemberAdd", async (member) => {
     console.error("guildMemberAdd handler error:", err);
   }
 });
-const MUSIC_CHANNEL_ID = "1532779594195669113";
+const MUSIC_CHANNEL_ID = "1489967092697399378";
 const spotifyMessages = new Map();
 const CACHE_TIME = 5 * 60 * 1000; 
 
@@ -826,13 +826,11 @@ console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?
 
     const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
 
-    // Si dejó de escuchar Spotify
     if (!spotify) {
         spotifyMessages.delete(newPresence.userId);
         return;
     }
 
-    // URL de la portada del álbum
     const cover = spotify.assets?.largeImage
         ? `https://i.scdn.co/image/${spotify.assets.largeImage.replace("spotify:", "")}`
         : null;
@@ -858,17 +856,13 @@ console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?
     }
 
     const current = spotifyMessages.get(newPresence.userId);
-
-    // Si sigue siendo la misma canción, no hacemos nada
-    if (current && (Date.now() - current.createdAt) > CACHE_TIME) {
-      spotifyMessages.delete(newPresence.userId);
-    }
+      
     if (current?.trackId === spotify.syncId)
         return;
 
     try {
 
-        if (current?.messageId) {
+        if (current?.messageId && current && (Date.now() - current.createdAt) < CACHE_TIME) {
 
             const msg = await channel.messages.fetch(current.messageId);
 
@@ -889,7 +883,8 @@ console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?
 
             spotifyMessages.set(newPresence.userId, {
                 trackId: spotify.syncId,
-                messageId: msg.id
+                messageId: msg.id,
+                createdAt: Date.now()
             });
 
         }
@@ -902,7 +897,8 @@ console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?
 
         spotifyMessages.set(newPresence.userId, {
             trackId: spotify.syncId,
-            messageId: msg.id
+            messageId: msg.id,
+            createdAt: Date.now()
         });
 
     }
