@@ -813,6 +813,7 @@ client.on("guildMemberAdd", async (member) => {
 });
 const MUSIC_CHANNEL_ID = "1532779594195669113";
 const spotifyMessages = new Map();
+const CACHE_TIME = 5 * 60 * 1000; 
 
 client.on("presenceUpdate", async (oldPresence, newPresence) => {
 console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?.tag);
@@ -839,15 +840,15 @@ console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?
     const embed = new EmbedBuilder()
         .setColor("#1DB954")
         .setAuthor({
-            name: `${newPresence.member.displayName} está escuchando Spotify`,
+            name: `${newPresence.member.displayName} is listening to Spotify`,
             iconURL: newPresence.member.displayAvatarURL()
         })
         .setTitle(spotify.details)
         .setURL(`https://open.spotify.com/track/${spotify.syncId}`)
         .setDescription(`🎤 **${spotify.state}**`)
         .addFields({
-            name: "💿 Álbum",
-            value: spotify.assets?.largeText ?? "Desconocido"
+            name: "💿 Album",
+            value: spotify.assets?.largeText ?? "Unknown"
         })
         .setTimestamp();
 
@@ -859,6 +860,9 @@ console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?
     const current = spotifyMessages.get(newPresence.userId);
 
     // Si sigue siendo la misma canción, no hacemos nada
+    if (current && (Date.now() - current.createdAt) > CACHE_TIME) {
+      spotifyMessages.delete(newPresence.userId);
+    }
     if (current?.trackId === spotify.syncId)
         return;
 
