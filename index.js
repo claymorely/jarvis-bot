@@ -811,99 +811,84 @@ client.on("guildMemberAdd", async (member) => {
     console.error("guildMemberAdd handler error:", err);
   }
 });
-const MUSIC_CHANNEL_ID = "1532779594195669113";
+const MUSIC_CHANNEL_ID = "1489967092697399378";
 const spotifyMessages = new Map();
-const CACHE_TIME = 5 * 60 * 1000; 
+const CACHE_TIME = 5 * 60 * 1000;
 
 client.on("presenceUpdate", async (oldPresence, newPresence) => {
-console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?.tag);
-    if (!newPresence?.member || newPresence.member.user.bot) return;
+  if (!newPresence?.member || newPresence.member.user.bot) return;
 
-    const spotify = newPresence.activities.find(activity =>
-        activity.type === ActivityType.Listening &&
-        activity.name === "Spotify"
-    );
+  const spotify = newPresence.activities.find(
+    (activity) => activity.type === ActivityType.Listening && activity.name === "Spotify"
+  );
 
-    const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
+  if (!spotify) {
+    spotifyMessages.delete(newPresence.userId);
+    return;
+  }
 
-    if (!spotify) {
-        spotifyMessages.delete(newPresence.userId);
-        return;
+  const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
+
+  const cover = spotify.assets?.largeImage
+    ? `https://i.scdn.co/image/${spotify.assets.largeImage.replace("spotify:", "")}`
+    : null;
+
+  const embed = new EmbedBuilder()
+    .setColor("#1DB954")
+    .setAuthor({
+      name: `${newPresence.member.displayName} is listening to Spotify`,
+      iconURL: newPresence.member.displayAvatarURL(),
+    })
+    .setTitle(spotify.details)
+    .setURL(`https://open.spotify.com/track/${spotify.syncId}`)
+    .setDescription(`🎤 **${spotify.state}**`)
+    .addFields({
+      name: "💿 Album",
+      value: spotify.assets?.largeText ?? "Unknown",
+    })
+    .setTimestamp();
+
+  if (cover) {
+    embed.setThumbnail(cover);
+  }
+
+  const current = spotifyMessages.get(newPresence.userId);
+  const now = Date.now();
+  const lastPublishedAt = current?.lastPublishedAt ?? current?.createdAt ?? 0;
+
+  try {
+    if (current?.messageId && now - lastPublishedAt < CACHE_TIME) {
+      const msg = await channel.messages.fetch(current.messageId);
+      await msg.edit({ embeds: [embed] });
+
+      spotifyMessages.set(newPresence.userId, {
+        ...current,
+        trackId: spotify.syncId,
+        messageId: msg.id,
+        lastPublishedAt,
+      });
+    } else {
+      const msg = await channel.send({ embeds: [embed] });
+      spotifyMessages.set(newPresence.userId, {
+        trackId: spotify.syncId,
+        messageId: msg.id,
+        lastPublishedAt: now,
+      });
     }
-
-    const cover = spotify.assets?.largeImage
-        ? `https://i.scdn.co/image/${spotify.assets.largeImage.replace("spotify:", "")}`
-        : null;
-
-    const embed = new EmbedBuilder()
-        .setColor("#1DB954")
-        .setAuthor({
-            name: `${newPresence.member.displayName} is listening to Spotify`,
-            iconURL: newPresence.member.displayAvatarURL()
-        })
-        .setTitle(spotify.details)
-        .setURL(`https://open.spotify.com/track/${spotify.syncId}`)
-        .setDescription(`🎤 **${spotify.state}**`)
-        .addFields({
-            name: "💿 Album",
-            value: spotify.assets?.largeText ?? "Unknown"
-        })
-        .setTimestamp();
-
-    // <-- Aquí se agrega la portada pequeña
-    if (cover) {
-        embed.setThumbnail(cover);
-    }
-
-    const current = spotifyMessages.get(newPresence.userId);
-      
-    if (current?.trackId === spotify.syncId)
-        return;
-
+  } catch (e) {
+    console.error("Spotify status update failed:", e.message);
     try {
-
-        if (current?.messageId && current && (Date.now() - current.createdAt) < CACHE_TIME) {
-
-            const msg = await channel.messages.fetch(current.messageId);
-
-            await msg.edit({
-                embeds: [embed]
-            });
-
-            spotifyMessages.set(newPresence.userId, {
-                trackId: spotify.syncId,
-                messageId: msg.id
-            });
-
-        } else {
-
-            const msg = await channel.send({
-                embeds: [embed]
-            });
-
-            spotifyMessages.set(newPresence.userId, {
-                trackId: spotify.syncId,
-                messageId: msg.id,
-                createdAt: Date.now()
-            });
-
-        }
-
-    } catch {
-
-        const msg = await channel.send({
-            embeds: [embed]
-        });
-
-        spotifyMessages.set(newPresence.userId, {
-            trackId: spotify.syncId,
-            messageId: msg.id,
-            createdAt: Date.now()
-        });
-
+      const msg = await channel.send({ embeds: [embed] });
+      spotifyMessages.set(newPresence.userId, {
+        trackId: spotify.syncId,
+        messageId: msg.id,
+        lastPublishedAt: now,
+      });
+    } catch (sendErr) {
+      console.error("Spotify status publish failed:", sendErr.message);
     }
-
-}); 
+  }
+});
 
 
 client.login(process.env.DISCORD_TOKEN).catch((e) => {
