@@ -1,17 +1,37 @@
 import { status } from "minecraft-server-util";
 import { EmbedBuilder } from "discord.js";
+import fs from "fs";
 
 const SERVER_HOST = "fabriccraft.net";
 const SERVER_PORT = 25565;
 const STATUS_CHANNEL_ID = "1532839139844816976";
-const UPDATE_INTERVAL_MS = 60_000; // every 60 seconds
+const UPDATE_INTERVAL_MS = 60_000;
+const MESSAGE_ID_FILE = "./status-message-id.txt";
+
+// Your current status message ID (so it always edits this one)
+const HARDCODED_MESSAGE_ID = "1532847325163163729";
 
 const OPTIONS = {
   timeout: 5000,
   enableSRV: true,
 };
 
-let statusMessageId = null;
+let statusMessageId = HARDCODED_MESSAGE_ID;
+
+try {
+  if (fs.existsSync(MESSAGE_ID_FILE)) {
+    const saved = fs.readFileSync(MESSAGE_ID_FILE, "utf8").trim();
+    if (saved) statusMessageId = saved;
+  }
+} catch {}
+
+function saveMessageId(id) {
+  try {
+    fs.writeFileSync(MESSAGE_ID_FILE, id || "");
+  } catch (e) {
+    console.error("[serverStatus] failed to save message id:", e.message);
+  }
+}
 
 async function fetchStatus() {
   try {
@@ -21,11 +41,8 @@ async function fetchStatus() {
       players: result.players.online,
       maxPlayers: result.players.max,
       version: result.version.name,
-      protocol: result.version.protocol,
-      motd: result.motd?.clean || "—",
       ping: result.roundTripLatency ?? null,
       sample: result.players.sample?.map((p) => p.name) || [],
-      favicon: result.favicon || null,
     };
   } catch (e) {
     return {
@@ -61,25 +78,22 @@ function buildEmbed(data) {
       { name: "Players", value: playerBar, inline: true },
       { name: "Version", value: data.version || "—", inline: true },
       { name: "Ping", value: pingText, inline: true },
-      { name: "TPS", value: "N/A*", inline: true },
       { name: "Address", value: `\`${SERVER_HOST}\``, inline: true },
       { name: "Last updated", value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true }
-    )
-    .setFooter({ text: "*TPS requires a server-side plugin and is not available via status protocol" });
-
-  if (data.sample.length > 0) {
-    const names = data.sample.slice(0, 12).join(", ");
-    embed.addFields({
-      name: `Online players (${Math.min(data.sample.length, 12)}${data.sample.length > 12 ? "+" : ""})`,
-      value: names || "—",
-    });
-  }
-
-  if (data.motd && data.motd !== "—") {
-    embed.addFields({ name: "MOTD", value: data.motd.slice(0, 200) });
-  }
+    );
 
   return embed;
+}
+
+export async function getOnlinePlayers() {
+  const data = await fetchStatus();
+  if (!data.online) return { online: false };
+  return {
+    online: true,
+    count: data.players,
+    max: data.maxPlayers,
+    names: data.sample,
+  };
 }
 
 export function startServerStatus(client) {
@@ -87,7 +101,7 @@ export function startServerStatus(client) {
     try {
       const channel = await client.channels.fetch(STATUS_CHANNEL_ID).catch(() => null);
       if (!channel || !channel.isTextBased()) {
-        console.error("[serverStatus] Channel not found or not text-based:", STATUS_CHANNEL_ID);
+        console.error("[serverStatus] Channel not found:", STATUS_CHANNEL_ID);
         return;
       }
 
@@ -101,11 +115,13 @@ export function startServerStatus(client) {
           return;
         } catch {
           statusMessageId = null;
+          saveMessageId(null);
         }
       }
 
       const msg = await channel.send({ embeds: [embed] });
       statusMessageId = msg.id;
+      saveMessageId(msg.id);
     } catch (err) {
       console.error("[serverStatus] update failed:", err.message);
     }
@@ -113,6 +129,5 @@ export function startServerStatus(client) {
 
   setTimeout(tick, 3000);
   setInterval(tick, UPDATE_INTERVAL_MS);
-
-  console.log("[serverStatus] started — updating every", UPDATE_INTERVAL_MS / 1000, "s");
+  console.log("[serverStatus] started");
 }
