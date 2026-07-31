@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, AttachmentBuilder } from "discord.js";
+import { Client, GatewayIntentBits, AttachmentBuilder, ActivityType, EmbedBuilder } from "discord.js";
 import Groq from "groq-sdk";
 import fs from "fs";
 import path from "path";
@@ -158,6 +158,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildPresences
   ],
 });
 
@@ -810,6 +811,100 @@ client.on("guildMemberAdd", async (member) => {
     console.error("guildMemberAdd handler error:", err);
   }
 });
+const MUSIC_CHANNEL_ID = "1532779594195669113";
+const spotifyMessages = new Map();
+
+client.on("presenceUpdate", async (oldPresence, newPresence) => {
+console.log("Presence update:", oldPresence?.user?.tag, "->", newPresence?.user?.tag);
+    if (!newPresence?.member || newPresence.member.user.bot) return;
+
+    const spotify = newPresence.activities.find(activity =>
+        activity.type === ActivityType.Listening &&
+        activity.name === "Spotify"
+    );
+
+    const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
+
+    // Si dejó de escuchar Spotify
+    if (!spotify) {
+        spotifyMessages.delete(newPresence.userId);
+        return;
+    }
+
+    // URL de la portada del álbum
+    const cover = spotify.assets?.largeImage
+        ? `https://i.scdn.co/image/${spotify.assets.largeImage.replace("spotify:", "")}`
+        : null;
+
+    const embed = new EmbedBuilder()
+        .setColor("#1DB954")
+        .setAuthor({
+            name: `${newPresence.member.displayName} está escuchando Spotify`,
+            iconURL: newPresence.member.displayAvatarURL()
+        })
+        .setTitle(spotify.details)
+        .setURL(`https://open.spotify.com/track/${spotify.syncId}`)
+        .setDescription(`🎤 **${spotify.state}**`)
+        .addFields({
+            name: "💿 Álbum",
+            value: spotify.assets?.largeText ?? "Desconocido"
+        })
+        .setTimestamp();
+
+    // <-- Aquí se agrega la portada pequeña
+    if (cover) {
+        embed.setThumbnail(cover);
+    }
+
+    const current = spotifyMessages.get(newPresence.userId);
+
+    // Si sigue siendo la misma canción, no hacemos nada
+    if (current?.trackId === spotify.syncId)
+        return;
+
+    try {
+
+        if (current?.messageId) {
+
+            const msg = await channel.messages.fetch(current.messageId);
+
+            await msg.edit({
+                embeds: [embed]
+            });
+
+            spotifyMessages.set(newPresence.userId, {
+                trackId: spotify.syncId,
+                messageId: msg.id
+            });
+
+        } else {
+
+            const msg = await channel.send({
+                embeds: [embed]
+            });
+
+            spotifyMessages.set(newPresence.userId, {
+                trackId: spotify.syncId,
+                messageId: msg.id
+            });
+
+        }
+
+    } catch {
+
+        const msg = await channel.send({
+            embeds: [embed]
+        });
+
+        spotifyMessages.set(newPresence.userId, {
+            trackId: spotify.syncId,
+            messageId: msg.id
+        });
+
+    }
+
+}); 
+
 
 client.login(process.env.DISCORD_TOKEN).catch((e) => {
   console.error("LOGIN FAILED:", e?.message || e);
