@@ -158,7 +158,7 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.GuildPresences
+    GatewayIntentBits.GuildPresences,
   ],
 });
 
@@ -744,12 +744,13 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // --- JIMMY: PLAYFUL & CHARMING ---
+    // --- JIMMY: PLAYFUL & CHARMING (not romantic — kept consistent with the
+    // earlier decision to leave flirty/romantic framing about a real person out) ---
     const JIMMY_ID = "882670933410717717";
     if (message.author.id === JIMMY_ID) {
       messages.push({
         role: "system",
-        content: `[SPECIAL TONE FOR JIMMY: Be playful, witty, and charming with this person. Engage in good-natured banter, make clever jokes at his expense about FabricCraft, tease him about his skill or failures. Be warm, engaging, and fun. flirt with him, call him handsome, Light ribbing is welcome — this is someone you enjoy talking to.]`
+        content: `[SPECIAL TONE FOR JIMMY: Be playful, witty, and charming with this person. Engage in good-natured banter, make clever jokes at his expense about FabricCraft, tease him about his skill or failures. Be warm, engaging, and fun. Light ribbing is welcome — this is someone you enjoy talking to.]`
       });
     }
 
@@ -811,82 +812,102 @@ client.on("guildMemberAdd", async (member) => {
     console.error("guildMemberAdd handler error:", err);
   }
 });
+
+// --- SPOTIFY "NOW LISTENING" TRACKER ---
+// One message per user in MUSIC_CHANNEL_ID. Editing the same message as
+// their track changes, only posting a fresh one every CACHE_TIME (so a long
+// listening session bumps back to the bottom of the channel periodically
+// instead of getting buried forever).
+//
+// IMPORTANT: Discord's presence data for Spotify is flaky — the activity can
+// blip out and back in for a few seconds even while a song plays
+// continuously, and the same thing happens around a genuine stop/restart.
+// The previous version deleted the tracked message the instant Spotify
+// activity disappeared, so the very next update (even a same-song blip) had
+// no memory of the old message and created a brand-new one — that was the
+// root cause of both "new message on stop/resume" and "new message every
+// song" that were reported. Fix: never delete tracking on presence loss;
+// only skip. A fresh message only ever gets sent when CACHE_TIME has
+// genuinely elapsed since the last one was posted.
 const MUSIC_CHANNEL_ID = "1532779594195669113";
-const spotifyMessages = new Map();
-const CACHE_TIME = 5 * 60 * 1000;
+const spotifyMessages = new Map(); // userId -> { trackId, messageId, lastPublishedAt }
+const CACHE_TIME = 5 * 60 * 1000; // 5 minutes
 
 client.on("presenceUpdate", async (oldPresence, newPresence) => {
-  if (!newPresence?.member || newPresence.member.user.bot) return;
-
-  const spotify = newPresence.activities.find(
-    (activity) => activity.type === ActivityType.Listening && activity.name === "Spotify"
-  );
-
-  if (!spotify) {
-    spotifyMessages.delete(newPresence.userId);
-    return;
-  }
-
-  const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
-
-  const cover = spotify.assets?.largeImage
-    ? `https://i.scdn.co/image/${spotify.assets.largeImage.replace("spotify:", "")}`
-    : null;
-
-  const embed = new EmbedBuilder()
-    .setColor("#1DB954")
-    .setAuthor({
-      name: `${newPresence.member.displayName} is listening to Spotify`,
-      iconURL: newPresence.member.displayAvatarURL(),
-    })
-    .setTitle(spotify.details)
-    .setURL(`https://open.spotify.com/track/${spotify.syncId}`)
-    .setDescription(`🎤 **${spotify.state}**`)
-    .addFields({
-      name: "💿 Album",
-      value: spotify.assets?.largeText ?? "Unknown",
-    })
-    .setTimestamp();
-
-  if (cover) {
-    embed.setThumbnail(cover);
-  }
-
-  const current = spotifyMessages.get(newPresence.userId);
-  const now = Date.now();
-  const lastPublishedAt = current?.lastPublishedAt ?? current?.createdAt ?? 0;
-
   try {
-    if (current?.messageId && now - lastPublishedAt < CACHE_TIME) {
-      const msg = await channel.messages.fetch(current.messageId);
-      await msg.edit({ embeds: [embed] });
+    if (!newPresence?.member || newPresence.member.user.bot) return;
 
-      spotifyMessages.set(newPresence.userId, {
-        ...current,
-        trackId: spotify.syncId,
-        messageId: msg.id,
-        lastPublishedAt,
-      });
-    } else {
-      const msg = await channel.send({ embeds: [embed] });
-      spotifyMessages.set(newPresence.userId, {
-        trackId: spotify.syncId,
-        messageId: msg.id,
-        lastPublishedAt: now,
-      });
-    }
-  } catch (e) {
-    console.error("Spotify status update failed:", e.message);
+    const spotify = newPresence.activities.find(
+      (activity) => activity.type === ActivityType.Listening && activity.name === "Spotify"
+    );
+
+    // No Spotify activity right now — do NOT clear tracking. Presence data
+    // flickers, and clearing here was the root cause of the reported bugs.
+    // If the user is genuinely done listening, the tracked message just
+    // stops updating and will naturally get replaced by a fresh one next
+    // time they play something, once CACHE_TIME has passed.
+    if (!spotify) return;
+
+    const current = spotifyMessages.get(newPresence.userId);
+
+    // Same track as already tracked — nothing to do. Without this check,
+    // presenceUpdate fires on unrelated presence changes too (status,
+    // other activities) and was re-editing the embed constantly.
+    if (current?.trackId === spotify.syncId) return;
+
+    const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
+
+    const cover = spotify.assets?.largeImage
+      ? `https://i.scdn.co/image/${spotify.assets.largeImage.replace("spotify:", "")}`
+      : null;
+
+    const embed = new EmbedBuilder()
+      .setColor("#1DB954")
+      .setAuthor({
+        name: `${newPresence.member.displayName} is listening to Spotify`,
+        iconURL: newPresence.member.displayAvatarURL(),
+      })
+      .setTitle(spotify.details)
+      .setURL(`https://open.spotify.com/track/${spotify.syncId}`)
+      .setDescription(`🎤 **${spotify.state}**`)
+      .addFields({ name: "💿 Album", value: spotify.assets?.largeText ?? "Unknown" })
+      .setTimestamp();
+
+    if (cover) embed.setThumbnail(cover);
+
+    const now = Date.now();
+    const withinCacheWindow = current?.messageId && now - current.lastPublishedAt < CACHE_TIME;
+
     try {
+      if (withinCacheWindow) {
+        const msg = await channel.messages.fetch(current.messageId);
+        await msg.edit({ embeds: [embed] });
+        spotifyMessages.set(newPresence.userId, {
+          trackId: spotify.syncId,
+          messageId: msg.id,
+          lastPublishedAt: current.lastPublishedAt, // keep the ORIGINAL post time — the 5-min window is since first post, not since last edit
+        });
+      } else {
+        const msg = await channel.send({ embeds: [embed] });
+        spotifyMessages.set(newPresence.userId, {
+          trackId: spotify.syncId,
+          messageId: msg.id,
+          lastPublishedAt: now,
+        });
+      }
+    } catch (e) {
+      // Edit failed (e.g. the old message was deleted manually) — fall back
+      // to posting fresh rather than crashing the handler.
+      console.error("Spotify message edit failed, sending a new one:", e.message);
       const msg = await channel.send({ embeds: [embed] });
       spotifyMessages.set(newPresence.userId, {
         trackId: spotify.syncId,
         messageId: msg.id,
         lastPublishedAt: now,
       });
-    } catch (sendErr) {
-      console.error("Spotify status publish failed:", sendErr.message);
     }
+  } catch (err) {
+    console.error("presenceUpdate handler error:", err);
   }
 });
 
