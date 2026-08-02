@@ -4,7 +4,7 @@
   "welcomeChannelId": "1525824995882700800",
   "ownerIds": ["182529468215066624"],
   "modIds": ["473613773630865443"],
-  "pingBlockUserIds": ["182529468215066624"],
+  "pingBlockUserIds": [],
   "cooldownMs": 8000,
   "globalWindowMs": 10000,
   "globalMaxCalls": 15,
