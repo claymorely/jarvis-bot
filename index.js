@@ -141,15 +141,15 @@ if (!process.env.GROQ_API_KEY) {
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // --- ASK FUNCTION WITH MULTI‑MODEL FALLBACK (Groq only) ---
+// Tries config.models in listed priority order. 429 (rate limit), 5xx, and
+// 400 (dead/unknown model ID, context length exceeded) are all retryable —
+// a dead or oversized model shouldn't kill the whole request.
 async function ask(messages) {
   const models = config.models || ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
   if (models.length === 0) throw new Error("No models configured");
 
-  // Shuffle to spread load
-  const shuffled = [...models].sort(() => Math.random() - 0.5);
-
   let lastError = null;
-  for (const model of shuffled) {
+  for (const model of models) {
     try {
       const completion = await groq.chat.completions.create({
         model,
@@ -160,14 +160,16 @@ async function ask(messages) {
       return completion;
     } catch (e) {
       lastError = e;
-      if (e?.status === 429 || (e?.status >= 500 && e?.status < 600)) {
+      if (e?.status === 400 || e?.status === 429 || (e?.status >= 500 && e?.status < 600)) {
         console.warn(`Model ${model} failed (${e.status}), trying next...`);
         continue;
       }
       throw e; // non‑retryable
     }
   }
-  throw lastError || new Error("All models exhausted");
+  const exhausted = lastError || new Error("All models exhausted");
+  exhausted.allModelsFailed = true;
+  throw exhausted;
 }
 
 // --- THE REST OF THE BOT ---
@@ -763,7 +765,7 @@ You are allowed to be EXTREMELY informal, playful, and unfiltered with this pers
     console.error("Handler error:", err?.status, err?.message, err);
     try {
       let errorMsg = "Something broke on my end.";
-      if (err?.message?.includes("All models exhausted") || err?.status === 429) {
+      if (err?.allModelsFailed || err?.status === 429) {
         errorMsg = "All AI models are rate‑limited or unavailable. Try again in a minute.";
       }
       await sendReply(message, errorMsg);
