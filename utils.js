@@ -4,6 +4,8 @@ import path from "path";
 export const CONFIG_PATH = "./config.json";
 export const SYSTEM_PROMPT_PATH = "./system-prompt.txt";
 export const LOG_PATH = "./friday-violations.log";
+// DATA_DIR lets persistent files live on a Railway volume (defaults to cwd locally).
+export const DATA_DIR = process.env.DATA_DIR || ".";
 
 export const DEFAULT_CONFIG = {
   triggers: ["friday"],
@@ -307,7 +309,7 @@ You can be extremely informal, playful, and unfiltered with this person.
 };
 
 // --- PERMANENT MEMORY (survives friday reset) ---
-export const PERM_MEMORY_PATH = "./permanent-memory.json";
+export const PERM_MEMORY_PATH = path.join(DATA_DIR, "permanent-memory.json");
 
 export function loadPermanentMemory() {
   try {
