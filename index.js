@@ -30,6 +30,11 @@ import {
   MAX_REPLY,
   GAP_MS,
   CONFIG_PATH,
+  loadPermanentMemory,
+  addPermanentFact,
+  removePermanentFact,
+  clearPermanentMemory,
+  formatPermanentMemoryForPrompt,
 } from "./utils.js";
 
 import { initAI, ask } from "./ai.js";
@@ -45,8 +50,8 @@ if (!process.env.DISCORD_TOKEN) {
   console.error("FATAL: DISCORD_TOKEN is missing");
   process.exit(1);
 }
-if (!process.env.GROQ_API_KEY && !process.env.DEEPSEEK_API_KEY) {
-  console.error("FATAL: Need at least one of GROQ_API_KEY or DEEPSEEK_API_KEY");
+if (!process.env.GROQ_API_KEY) {
+  console.error("FATAL: GROQ_API_KEY is missing (need at least one Groq key)");
   process.exit(1);
 }
 
@@ -133,15 +138,61 @@ client.on("messageCreate", async (message) => {
     }
     if (!isFridayEnabled()) return;
 
-    // Reset memory
-    if (named && /\breset\b/i.test(lower)) {
+    // Reset short-term chat history only (permanent memory stays)
+    if (named && /\breset\b/i.test(lower) && !/\breset\s+memory\b/i.test(lower)) {
       if (rank === "OWNER" || rank === "MOD") {
         clearMemory(message.channel.id);
-        await sendReply(message, "Memory cleared.");
+        await sendReply(message, "Chat history cleared. Permanent memory is untouched.");
       } else {
         await sendReply(message, "Not your call to make.");
       }
       return;
+    }
+
+    // Permanent memory commands (owner only)
+    if (named && rank === "OWNER") {
+      if (/\breset\s+memory\b/i.test(lower)) {
+        clearPermanentMemory();
+        await sendReply(message, "Permanent memory wiped.");
+        return;
+      }
+
+      const rememberMatch = content.match(/\bremember\b\s+(.+)/i);
+      if (rememberMatch) {
+        const fact = rememberMatch[1].trim();
+        const result = addPermanentFact(fact);
+        if (!result.ok && result.reason === "duplicate") {
+          await sendReply(message, "Already have that one.");
+        } else if (!result.ok) {
+          await sendReply(message, "Nothing to remember.");
+        } else {
+          await sendReply(message, `Got it. Saved (#${result.facts.length}): ${fact}`);
+        }
+        return;
+      }
+
+      const forgetMatch = content.match(/\bforget\b\s+(.+)/i);
+      if (forgetMatch) {
+        const result = removePermanentFact(forgetMatch[1]);
+        if (!result.ok) {
+          await sendReply(message, "Couldn't find that in permanent memory.");
+        } else {
+          await sendReply(message, `Forgot: ${result.removed}`);
+        }
+        return;
+      }
+
+      if (/\bmemory\b/i.test(lower) && !/\breset\b/i.test(lower)) {
+        const facts = loadPermanentMemory();
+        if (facts.length === 0) {
+          await sendReply(message, "Permanent memory is empty.");
+        } else {
+          const list = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+          const reply = list.length > 1800 ? list.slice(0, 1800) + "…" : list;
+          await sendReply(message, `Permanent memory:\n${reply}`);
+        }
+        return;
+      }
     }
 
     if (!named) return;
@@ -195,6 +246,12 @@ client.on("messageCreate", async (message) => {
     const userLine = `${tag} [display name: ${displayName}] says: ${content}`;
 
     const messages = [{ role: "system", content: loadSystemPrompt() }, ...history];
+
+    // Permanent memory (owner-taught facts that survive reset)
+    const permNote = formatPermanentMemoryForPrompt();
+    if (permNote) {
+      messages.push({ role: "system", content: permNote });
+    }
 
     // Minecraft wiki context
     if (MINECRAFT_KEYWORDS.test(lower)) {
