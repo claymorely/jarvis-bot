@@ -295,7 +295,7 @@ const WIKI_JUNK_TITLE = /(java edition|edition|update|guide|snapshot|version his
 const WIKI_GENERIC_TERMS = new Set([
   "breed", "breeding", "damage", "spawn", "spawning", "drops", "drop", "craft", "crafting",
   "build", "make", "use", "used", "tame", "feed", "trade", "trading", "farm", "farming",
-  "kill", "die", "death", "find", "rate", "best", "get",
+  "kill", "die", "death", "find", "rate", "best", "get", "block", "blocks",
 ]);
 const WIKI_UA = { "User-Agent": "jarvis-bot/1.0 (Discord bot)" };
 
@@ -321,26 +321,48 @@ async function searchWikiTitle(query) {
   return clean[0] || results[0] || null;
 }
 
+function stripWikiHtml(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<li[ >]/gi, "\n- ")
+    .replace(/<\/tr>/gi, "\n")
+    .replace(/<\/t[dh]>/gi, " | ")
+    .replace(/<\/h[1-6]>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&minus;/gi, "-")
+    .replace(/&times;/gi, "x")
+    .replace(/&gt;/gi, ">")
+    .replace(/&lt;/gi, "<")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 export async function fetchWikiContext(query) {
   try {
     const title = await searchWikiTitle(query);
     if (!title) return null;
 
-    const extractUrl = `https://minecraft.wiki/api.php?action=query&prop=extracts&explaintext&redirects&exlimit=1&titles=${encodeURIComponent(title)}&format=json`;
-    const extractRes = await fetch(extractUrl, {
+    const parseUrl = `https://minecraft.wiki/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&redirects=1&format=json&formatversion=2`;
+    const parseRes = await fetch(parseUrl, {
       headers: WIKI_UA,
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(10000),
     });
-    const extractData = await extractRes.json();
-    const pages = extractData?.query?.pages || {};
-    const page = Object.values(pages)[0];
-    const extract = page?.extract;
+    const parseData = await parseRes.json();
+    const html = parseData?.parse?.text;
+    if (typeof html !== "string") return null;
+    const extract = stripWikiHtml(html).slice(0, 8000);
     if (!extract) return null;
 
     return {
       title,
       url: `https://minecraft.wiki/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
-      extract: extract.slice(0, 8000),
+      extract,
     };
   } catch (e) {
     console.error("Wiki lookup failed:", e.message);
