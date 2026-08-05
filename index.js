@@ -260,7 +260,12 @@ client.on("messageCreate", async (message) => {
       if (wiki) {
         messages.push({
           role: "system",
-          content: `[WIKI LOOKUP — "${wiki.title}"]\n${wiki.extract}\n\nUse the above as your source of truth for this question if it's relevant. If it doesn't actually answer what was asked, say you're not sure rather than guessing.`,
+          content: `[WIKI LOOKUP — "${wiki.title}" (${wiki.url})]\n${wiki.extract}\n\nAnswer the question using ONLY the wiki text above, quoting it where you can. If it does not contain the specific answer, say you're not sure — never invent numbers, recipes, drops, or mechanics.`,
+        });
+      } else {
+        messages.push({
+          role: "system",
+          content: `[WIKI LOOKUP FAILED — no source retrieved]\nIf you cannot answer this Minecraft question confidently from your own knowledge, say you're not sure rather than guessing. Prefer admitting uncertainty over inventing details.`,
         });
       }
     }

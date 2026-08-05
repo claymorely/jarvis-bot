@@ -289,23 +289,59 @@ export async function resolveMemberByName(guild, name) {
   }
 }
 
+const WIKI_FILLER =
+  /\b(?:how|do|does|can|should|would|best|better|good|way|worth|many|much|any|some|or|i|you|we|they|my|me|to|make|craft|build|get|use|used|for|the|a|an|and|of|in|on|at|with|from|what|is|are|why|when|where|need|needed|recipe|minecraft|mc)\b/g;
+const WIKI_JUNK_TITLE = /(java edition|edition|update|guide|snapshot|version history|console|pocket edition)/i;
+const WIKI_GENERIC_TERMS = new Set([
+  "breed", "breeding", "damage", "spawn", "spawning", "drops", "drop", "craft", "crafting",
+  "build", "make", "use", "used", "tame", "feed", "trade", "trading", "farm", "farming",
+  "kill", "die", "death", "find", "rate", "best", "get",
+]);
+const WIKI_UA = { "User-Agent": "jarvis-bot/1.0 (Discord bot)" };
+
+async function wikiSearch(q, what, limit = 1) {
+  const url = `https://minecraft.wiki/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&srlimit=${limit}&srwhat=${what}`;
+  const res = await fetch(url, { headers: WIKI_UA, signal: AbortSignal.timeout(5000) });
+  const data = await res.json();
+  return (data?.query?.search || []).map((s) => s.title);
+}
+
+async function searchWikiTitle(query) {
+  const keywords = query.toLowerCase().replace(WIKI_FILLER, " ").replace(/\s+/g, " ").trim();
+  for (const q of [...new Set([query, keywords].filter(Boolean))]) {
+    const [hit] = await wikiSearch(q, "nearmatch");
+    if (hit) return hit;
+  }
+  for (const tok of (keywords || "").split(" ").filter((t) => t.length > 2 && !WIKI_GENERIC_TERMS.has(t))) {
+    const [hit] = await wikiSearch(tok, "nearmatch");
+    if (hit) return hit;
+  }
+  const results = await wikiSearch(keywords || query, "text", 5);
+  const clean = results.filter((t) => !WIKI_JUNK_TITLE.test(t));
+  return clean[0] || results[0] || null;
+}
+
 export async function fetchWikiContext(query) {
   try {
-    const searchUrl = `https://minecraft.wiki/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=1`;
-    const searchRes = await fetch(searchUrl, { signal: AbortSignal.timeout(5000) });
-    const searchData = await searchRes.json();
-    const title = searchData?.query?.search?.[0]?.title;
+    const title = await searchWikiTitle(query);
     if (!title) return null;
 
-    const extractUrl = `https://minecraft.wiki/api.php?action=query&prop=extracts&exintro&explaintext&titles=${encodeURIComponent(title)}&format=json`;
-    const extractRes = await fetch(extractUrl, { signal: AbortSignal.timeout(5000) });
+    const extractUrl = `https://minecraft.wiki/api.php?action=query&prop=extracts&explaintext&redirects&exlimit=1&titles=${encodeURIComponent(title)}&format=json`;
+    const extractRes = await fetch(extractUrl, {
+      headers: WIKI_UA,
+      signal: AbortSignal.timeout(8000),
+    });
     const extractData = await extractRes.json();
     const pages = extractData?.query?.pages || {};
     const page = Object.values(pages)[0];
     const extract = page?.extract;
     if (!extract) return null;
 
-    return { title, extract: extract.slice(0, 1200) };
+    return {
+      title,
+      url: `https://minecraft.wiki/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
+      extract: extract.slice(0, 8000),
+    };
   } catch (e) {
     console.error("Wiki lookup failed:", e.message);
     return null;
