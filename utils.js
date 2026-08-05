@@ -1,11 +1,13 @@
 import fs from "fs";
 import path from "path";
 
-export const CONFIG_PATH = "./config.json";
-export const SYSTEM_PROMPT_PATH = "./system-prompt.txt";
-export const LOG_PATH = "./friday-violations.log";
 // DATA_DIR lets persistent files live on a Railway volume (defaults to cwd locally).
 export const DATA_DIR = process.env.DATA_DIR || ".";
+
+export const CONFIG_PATH = path.join(DATA_DIR, "config.json");
+export const BUNDLED_CONFIG_PATH = "./config.json";
+export const SYSTEM_PROMPT_PATH = "./system-prompt.txt";
+export const LOG_PATH = "./friday-violations.log";
 
 export const DEFAULT_CONFIG = {
   triggers: ["friday"],
@@ -115,7 +117,23 @@ const lastBotMessageIds = new Map();
 let globalCallTimestamps = [];
 let fridayEnabled = true;
 
+function ensureConfigFile() {
+  if (DATA_DIR === "." || fs.existsSync(CONFIG_PATH)) return;
+  try {
+    if (fs.existsSync(BUNDLED_CONFIG_PATH)) {
+      fs.copyFileSync(BUNDLED_CONFIG_PATH, CONFIG_PATH);
+      console.log("Seeded config.json from bundled copy ->", CONFIG_PATH);
+    } else {
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
+      console.log("Wrote default config.json ->", CONFIG_PATH);
+    }
+  } catch (e) {
+    console.error("Failed to seed config.json:", e.message);
+  }
+}
+
 export function loadConfig() {
+  ensureConfigFile();
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
     return { ...DEFAULT_CONFIG, ...raw };
