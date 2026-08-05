@@ -1,7 +1,9 @@
+
 {
   "triggers": ["friday"],
   "allowedChannelIds": ["182529759400427520", "1519101258076782665"],
   "welcomeChannelId": "1525824995882700800",
+  "musicChannelId": "1532779594195669113",
   "ownerIds": ["182529468215066624"],
   "modIds": ["473613773630865443"],
   "pingBlockUserIds": [],
@@ -12,9 +14,22 @@
   "muteMaxMinutes": 1440,
   "lastMessagesDefault": 20,
   "roleWhitelist": ["iron", "gold", "emerald", "diamond", "ruby", "netherite", "gif perms"],
-
+  "memoryMaxTurns": 10,
   "models": [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant"
-  ]
+    {
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile"
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-chat"
+    },
+    {
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant"
+    }
+  ],
+  "specialTones": {
+    "882670933410717717": "JIMMY"
+  }
 }
