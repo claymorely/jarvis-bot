@@ -291,13 +291,15 @@ export async function resolveMemberByName(guild, name) {
 
 const WIKI_FILLER =
   /\b(?:how|do|does|can|should|would|best|better|good|way|worth|many|much|any|some|or|i|you|we|they|my|me|to|make|craft|build|get|use|used|for|the|a|an|and|of|in|on|at|with|from|what|is|are|why|when|where|need|needed|recipe|minecraft|mc)\b/g;
-const WIKI_JUNK_TITLE = /(java edition|edition|update|guide|snapshot|version history|console|pocket edition)/i;
+const WIKI_JUNK_TITLE = /(java edition|edition|update|guide|snapshot|version history|console|pocket edition|nintendo)/i;
 const WIKI_GENERIC_TERMS = new Set([
   "breed", "breeding", "damage", "spawn", "spawning", "drops", "drop", "craft", "crafting",
   "build", "make", "use", "used", "tame", "feed", "trade", "trading", "farm", "farming",
   "kill", "die", "death", "find", "rate", "best", "get", "block", "blocks",
 ]);
 const WIKI_UA = { "User-Agent": "jarvis-bot/1.0 (Discord bot)" };
+const WIKI_SIZE_QUESTION =
+  /(how (?:big|large|wide).{0,60}(?:world|overworld|nether|the end|dimension|map))|((?:world|overworld|nether|dimension).{0,20}(?:size|how big|how large))|(world size)/i;
 
 async function wikiSearch(q, what, limit = 1) {
   const url = `https://minecraft.wiki/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&srlimit=${limit}&srwhat=${what}`;
@@ -306,19 +308,32 @@ async function wikiSearch(q, what, limit = 1) {
   return (data?.query?.search || []).map((s) => s.title);
 }
 
-async function searchWikiTitle(query) {
-  const keywords = query.toLowerCase().replace(WIKI_FILLER, " ").replace(/\s+/g, " ").trim();
+function wikiKeywords(query) {
+  return query.toLowerCase().replace(WIKI_FILLER, " ").replace(/\s+/g, " ").trim();
+}
+
+async function collectWikiCandidates(query) {
+  const keywords = wikiKeywords(query);
+  const cands = [];
+  const seen = new Set();
+  const add = (t) => {
+    if (!t || seen.has(t) || WIKI_JUNK_TITLE.test(t)) return;
+    seen.add(t);
+    cands.push(t);
+  };
+  if (WIKI_SIZE_QUESTION.test(query)) add("World boundary");
   for (const q of [...new Set([query, keywords].filter(Boolean))]) {
     const [hit] = await wikiSearch(q, "nearmatch");
-    if (hit) return hit;
+    add(hit);
   }
   for (const tok of (keywords || "").split(" ").filter((t) => t.length > 2 && !WIKI_GENERIC_TERMS.has(t))) {
     const [hit] = await wikiSearch(tok, "nearmatch");
-    if (hit) return hit;
+    add(hit);
   }
-  const results = await wikiSearch(keywords || query, "text", 5);
-  const clean = results.filter((t) => !WIKI_JUNK_TITLE.test(t));
-  return clean[0] || results[0] || null;
+  if (cands.length === 0) {
+    for (const t of await wikiSearch(keywords || query, "text", 6)) add(t);
+  }
+  return cands;
 }
 
 function stripWikiHtml(html) {
@@ -343,31 +358,98 @@ function stripWikiHtml(html) {
     .trim();
 }
 
-export async function fetchWikiContext(query) {
+async function fetchWikiExtract(title) {
   try {
-    const title = await searchWikiTitle(query);
-    if (!title) return null;
-
     const parseUrl = `https://minecraft.wiki/api.php?action=parse&page=${encodeURIComponent(title)}&prop=text&redirects=1&format=json&formatversion=2`;
-    const parseRes = await fetch(parseUrl, {
-      headers: WIKI_UA,
-      signal: AbortSignal.timeout(10000),
-    });
+    const parseRes = await fetch(parseUrl, { headers: WIKI_UA, signal: AbortSignal.timeout(10000) });
     const parseData = await parseRes.json();
     const html = parseData?.parse?.text;
     if (typeof html !== "string") return null;
-    const extract = stripWikiHtml(html).slice(0, 8000);
-    if (!extract) return null;
+    const text = stripWikiHtml(html);
+    return text.length >= 200 ? text : null;
+  } catch (e) {
+    console.error("Wiki parse failed for", title + ":", e.message);
+    return null;
+  }
+}
+
+export async function fetchWikiContext(query) {
+  try {
+    const candidates = await collectWikiCandidates(query);
+    if (!candidates.length) return null;
+
+    const pages = [];
+    const want = new Set(candidates);
+    const done = new Set();
+    while (pages.length < 3 && want.size) {
+      const title = [...want][0];
+      want.delete(title);
+      if (done.has(title)) continue;
+      done.add(title);
+      const text = await fetchWikiExtract(title);
+      if (!text) continue;
+      if (/april fools/i.test(text.slice(0, 600))) continue;
+      const ptr = text.match(/[Ff]or\s+[^.,\n]{2,80}?\s*,?\s+in\s+other\s+editions,\s*see\s+([A-Z][^.,\n]{2,60})/);
+      if (ptr && !WIKI_JUNK_TITLE.test(ptr[1])) {
+        want.add(ptr[1].trim());
+        continue;
+      }
+      pages.push({ title, text });
+    }
+
+    if (!pages.length) return null;
+    const parts = pages.map((p, i) => `[${p.title}]\n${p.text.slice(0, i === 0 ? 8000 : 3000)}`);
+    const extract = parts.join("\n\n").slice(0, 14000);
 
     return {
-      title,
-      url: `https://minecraft.wiki/wiki/${encodeURIComponent(title.replace(/ /g, "_"))}`,
+      title: pages.map((p) => p.title).join(", "),
+      url: `https://minecraft.wiki/wiki/${encodeURIComponent(pages[0].title.replace(/ /g, "_"))}`,
       extract,
     };
   } catch (e) {
     console.error("Wiki lookup failed:", e.message);
     return null;
   }
+}
+
+export async function searchWeb(query) {
+  if (
+    !process.env.BRAVE_API_KEY &&
+    !(process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX) &&
+    !process.env.BING_API_KEY
+  ) {
+    return null;
+  }
+  if (process.env.BRAVE_API_KEY) {
+    const res = await fetch(
+      `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
+      {
+        headers: { "X-Subscription-Token": process.env.BRAVE_API_KEY, Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!res.ok) throw new Error(`brave ${res.status}`);
+    const d = await res.json();
+    const results = (d.web?.results || []).map((x) => ({ title: x.title, url: x.url, snippet: x.description }));
+    return { query, results };
+  }
+  if (process.env.GOOGLE_CSE_KEY && process.env.GOOGLE_CSE_CX) {
+    const res = await fetch(
+      `https://www.googleapis.com/customsearch/v1?key=${process.env.GOOGLE_CSE_KEY}&cx=${process.env.GOOGLE_CSE_CX}&q=${encodeURIComponent(query)}&num=5`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    const d = await res.json();
+    const results = (d.items || []).map((x) => ({ title: x.title, url: x.link, snippet: x.snippet }));
+    return { query, results };
+  }
+  const res = await fetch(
+    `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(query)}&count=5&responseFilter=Webpages`,
+    { headers: { "Ocp-Apim-Subscription-Key": process.env.BING_API_KEY }, signal: AbortSignal.timeout(8000) }
+  );
+  if (!res.ok) throw new Error(`bing ${res.status}`);
+  const d = await res.json();
+  const results = (d.webPages?.value || []).map((x) => ({ title: x.name, url: x.url, snippet: x.snippet }));
+  return { query, results };
 }
 
 export function getSpecialTone(userId, config) {

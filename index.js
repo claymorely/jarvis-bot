@@ -21,6 +21,7 @@ import {
   getSpecialTone,
   SPECIAL_TONE_PROMPTS,
   fetchWikiContext,
+  searchWeb,
   INJECTION_REGEX,
   SLANDER_REGEX,
   CREEP_REGEX,
@@ -253,20 +254,31 @@ client.on("messageCreate", async (message) => {
       messages.push({ role: "system", content: permNote });
     }
 
-    // Minecraft wiki context
+    // Minecraft wiki context (+ web search fallback)
     if (MINECRAFT_KEYWORDS.test(lower)) {
       await message.channel.sendTyping();
       const wiki = await fetchWikiContext(content);
       if (wiki) {
         messages.push({
           role: "system",
-          content: `[WIKI LOOKUP — "${wiki.title}" (${wiki.url})]\n${wiki.extract}\n\nAnswer the question using ONLY the wiki text above, quoting it where you can. If it does not contain the specific answer, say you're not sure — never invent numbers, recipes, drops, or mechanics.`,
+          content: `[WIKI LOOKUP — ${wiki.title} (${wiki.url})]\n${wiki.extract}\n\nAnswer the question directly using the facts above (tables and numbers included) — the answer is usually in there, so look carefully. If multiple editions are mentioned, answer for Java Edition by default. Only say "I'm not sure" if the text truly does not address the question. Never invent facts.`,
         });
       } else {
-        messages.push({
-          role: "system",
-          content: `[WIKI LOOKUP FAILED — no source retrieved]\nIf you cannot answer this Minecraft question confidently from your own knowledge, say you're not sure rather than guessing. Prefer admitting uncertainty over inventing details.`,
-        });
+        const web = await searchWeb(content);
+        if (web?.results?.length) {
+          messages.push({
+            role: "system",
+            content: `[WEB SEARCH — "${web.query}"]\n${web.results
+              .slice(0, 4)
+              .map((r, i) => `${i + 1}. ${r.title} — ${r.snippet}\n   (${r.url})`)
+              .join("\n")}\n\nAnswer the question using these search results as your source, citing the result(s) you used. If none actually answer it, say you're not sure rather than guessing.`,
+          });
+        } else {
+          messages.push({
+            role: "system",
+            content: `[WIKI LOOKUP FAILED — no source retrieved]\nIf you cannot answer this Minecraft question confidently from your own knowledge, say you're not sure rather than guessing. Prefer admitting uncertainty over inventing details.`,
+          });
+        }
       }
     }
 
