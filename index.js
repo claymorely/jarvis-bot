@@ -8,7 +8,6 @@ process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e)
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
 
 // --- BUNDLED FONT ---
-// More reliable than relying on the host OS having fonts installed.
 const FONT_PATH = "./Inter-Bold.ttf";
 const FONT_FAMILY = "WelcomeFont";
 try {
@@ -19,10 +18,6 @@ try {
 }
 
 // --- HOT-RELOADABLE CONFIG ---
-// config.json holds every tunable value (channels, IDs, cooldowns, role
-// whitelist, etc). Edit it directly on GitHub and redeploy, OR use the
-// "friday set X to Y" chat command for numeric values — either way, no
-// code change needed. Reloaded automatically whenever the file changes.
 const CONFIG_PATH = "./config.json";
 const DEFAULT_CONFIG = {
   triggers: ["friday"],
@@ -38,10 +33,8 @@ const DEFAULT_CONFIG = {
   muteMaxMinutes: 1440,
   lastMessagesDefault: 20,
   roleWhitelist: [],
+  models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
 };
-// Keys editable via the "friday set X to Y" chat command — numeric only.
-// Anything not in this list (role whitelist, IDs, system prompt) must be
-// edited directly in the file on GitHub, never through chat.
 const CHAT_EDITABLE_KEYS = [
   "cooldownMs", "globalWindowMs", "globalMaxCalls",
   "muteDefaultMinutes", "muteMaxMinutes", "lastMessagesDefault",
@@ -73,8 +66,6 @@ fs.watchFile(CONFIG_PATH, { interval: 2000 }, () => {
 });
 
 // --- HOT-RELOADABLE SYSTEM PROMPT ---
-// Loaded fresh from disk right before each Groq call — edit system-prompt.txt
-// on GitHub and it applies on the very next message, no redeploy needed.
 const SYSTEM_PROMPT_PATH = "./system-prompt.txt";
 function loadSystemPrompt() {
   try {
@@ -85,8 +76,6 @@ function loadSystemPrompt() {
   }
 }
 
-const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-const FALLBACK_MODEL = "llama-3.1-8b-instant";
 const MAX_REPLY = 600;
 const GAP_MS = 1200;
 const WELCOME_CARD_COLORS = ["#43B581", "#B08D57", "#FFFFFF", "#5865F2", "#EB459E", "#FAA61A"];
@@ -151,6 +140,38 @@ if (!process.env.GROQ_API_KEY) {
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// --- ASK FUNCTION WITH MULTI‑MODEL FALLBACK (Groq only) ---
+async function ask(messages) {
+  const models = config.models || ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+  if (models.length === 0) throw new Error("No models configured");
+
+  // Shuffle to spread load
+  const shuffled = [...models].sort(() => Math.random() - 0.5);
+
+  let lastError = null;
+  for (const model of shuffled) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model,
+        max_tokens: 220,
+        temperature: 0.8,
+        messages,
+      });
+      return completion;
+    } catch (e) {
+      lastError = e;
+      if (e?.status === 429 || (e?.status >= 500 && e?.status < 600)) {
+        console.warn(`Model ${model} failed (${e.status}), trying next...`);
+        continue;
+      }
+      throw e; // non‑retryable
+    }
+  }
+  throw lastError || new Error("All models exhausted");
+}
+
+// --- THE REST OF THE BOT ---
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -162,14 +183,10 @@ const client = new Client({
   ],
 });
 
-// Memory: no TTL, no size cap — persists until manually reset, per request.
-// Cost/context-limit tradeoffs of this were flagged and accepted.
 const memory = new Map();
 const cooldowns = new Map();
-const lastBotMessageIds = new Map(); // channelId -> messageId, for "delete your last message"
+const lastBotMessageIds = new Map();
 
-// Use instead of message.reply() so we always know Friday's most recent
-// message in a channel — needed for the delete-last-message command.
 async function sendReply(message, text) {
   const sent = await message.reply(text);
   lastBotMessageIds.set(message.channel.id, sent.id);
@@ -232,7 +249,7 @@ function getMemory(id) {
 }
 
 function setMemory(id, turns) {
-  memory.set(id, { turns, updated: Date.now() }); // no slice — uncapped
+  memory.set(id, { turns, updated: Date.now() });
 }
 
 function clean(text) {
@@ -267,25 +284,7 @@ function globalRateLimitOk() {
   return true;
 }
 
-async function ask(messages) {
-  try {
-    return await groq.chat.completions.create({
-      model: PRIMARY_MODEL, max_tokens: 220, temperature: 0.8, messages,
-    });
-  } catch (e) {
-    if (e?.status !== 429) throw e;
-    console.warn("70b rate limited, falling back to 8b");
-    return await groq.chat.completions.create({
-      model: FALLBACK_MODEL, max_tokens: 220, temperature: 0.8, messages,
-    });
-  }
-}
-
 // --- MINECRAFT WIKI LOOKUP ---
-// Only triggers on messages that look Minecraft-related, so normal chat
-// stays fast and unaffected. Fetches the real wiki instead of letting the
-// model guess from training data — still not infallible (she can misread
-// the summary), but far more reliable than guessing blind.
 const MINECRAFT_KEYWORDS = /\b(minecraft|redstone|nether|ender|enderman|creeper|zombie|skeleton|villager|crafting|enchant|potion|bedrock|obsidian|diamond|netherite|hopper|piston|command block|mob|biome|dimension|end portal|mace|trident|elytra|totem|beacon|anvil|brewing|smithing|farm(?:ing)?\b.*\b(mc|minecraft)?)\b/i;
 
 async function fetchWikiContext(query) {
@@ -311,9 +310,6 @@ async function fetchWikiContext(query) {
   }
 }
 
-// Resolves a typed name (not a mention) to a real guild member via Discord's
-// member search — matches display name or username, exact match preferred,
-// otherwise the closest search result. Returns null if nothing found.
 async function resolveMemberByName(guild, name) {
   if (!name) return null;
   try {
@@ -405,12 +401,7 @@ client.on("messageCreate", async (message) => {
     const lower = content.toLowerCase();
     const now = Date.now();
 
-    // --- PING BLOCK: deletes any message mentioning a protected user ID ---
-    // Runs server-wide, independent of allowed channels — needs Manage Messages.
-    // Checks the raw message text for a real "<@id>" mention only — NOT
-    // message.mentions.users, which Discord also populates when someone
-    // simply hits "reply" on a message (no visible @ping involved). That
-    // was causing genuine replies to get deleted along with actual pings.
+    // --- PING BLOCK ---
     if (config.pingBlockUserIds.some((id) => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`))) {
       try {
         await message.delete();
@@ -419,8 +410,6 @@ client.on("messageCreate", async (message) => {
       }
       return;
     }
-
-    // Channel restriction removed — Friday now responds in every channel.
 
     const rank = rankOf(message.author);
     const username = message.author.username;
@@ -465,9 +454,6 @@ client.on("messageCreate", async (message) => {
     const referredToSelf = /\b(me|myself|my)\b/i.test(lower);
     const isStaff = rank === "OWNER" || rank === "MOD";
 
-    // Resolves the command's target: mention > "me" > typed name (search).
-    // Returns { id, name } or null. nameHint is the word/phrase to search
-    // for when there's no mention — different commands extract it differently.
     async function resolveTarget(nameHint) {
       if (mentionMatch) {
         try {
@@ -487,7 +473,7 @@ client.on("messageCreate", async (message) => {
       return null;
     }
 
-    // --- DELETE LAST MESSAGE: "friday delete your last/previous message" (owner/mod only) ---
+    // --- DELETE LAST MESSAGE ---
     if (isStaff && /\bdelete\b/i.test(lower) && /(your|previous|last)\s+message/i.test(lower)) {
       const lastId = lastBotMessageIds.get(message.channel.id);
       if (!lastId) {
@@ -504,7 +490,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- LIVE CONFIG EDIT: "friday set X to Y" (owner/mod only, numeric keys only) ---
+    // --- LIVE CONFIG EDIT ---
     const setMatch = content.match(/\bset\s+(\w+)\s+(?:to\s+)?(-?\d+(?:\.\d+)?)/i);
     if (isStaff && setMatch) {
       const key = setMatch[1];
@@ -519,7 +505,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- MUTE / TIMEOUT: "friday mute <name> for X minutes/seconds/hours" (owner/mod only) ---
+    // --- MUTE ---
     if (isStaff && /\bmute\b/i.test(lower)) {
       const nameHint = (content.match(/\bmute\s+(\S+)/i) || [])[1];
       const target = await resolveTarget(nameHint);
@@ -534,7 +520,7 @@ client.on("messageCreate", async (message) => {
         const unit = durMatch[2].toLowerCase();
         if (unit.startsWith("sec")) durationMs = amount * 1000;
         else if (unit.startsWith("hour") || unit.startsWith("hr")) durationMs = amount * 60 * 60 * 1000;
-        else durationMs = amount * 60 * 1000; // minutes
+        else durationMs = amount * 60 * 1000;
       }
       const maxMs = config.muteMaxMinutes * 60 * 1000;
       durationMs = Math.min(durationMs, maxMs);
@@ -550,7 +536,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- UNMUTE: "friday unmute <name>" / "friday remove timeout from <name>" (owner/mod only) ---
+    // --- UNMUTE ---
     if (isStaff && /\b(unmute|remove\s+timeout|remove\s+mute)\b/i.test(lower)) {
       const nameHint = (content.match(/\bunmute\s+(\S+)/i) || content.match(/timeout\s+(?:from|on)\s+(\S+)/i) || [])[1];
       const target = await resolveTarget(nameHint);
@@ -568,11 +554,7 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- ROLE GIVE: "friday give <name>/me <role> role" (owner/mod only, whitelist only) ---
-    // config.roleWhitelist is just a list of allowed role NAMES — that list is the
-    // security boundary, not an ID mapping. The actual role is looked up live by
-    // name each time, so no manual ID copying needed. If Discord doesn't have a
-    // role with that exact name, she says so instead of guessing.
+    // --- ROLE GIVE ---
     if (isStaff && /\bgive\b/i.test(lower)) {
       const roleKey = config.roleWhitelist.find((k) =>
         new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
@@ -602,7 +584,7 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // --- ROLE TAKE AWAY: "friday take <role> from <name>/me" (owner/mod only, whitelist only) ---
+    // --- ROLE TAKE ---
     if (isStaff && /\btake\b/i.test(lower)) {
       const roleKey = config.roleWhitelist.find((k) =>
         new RegExp(`\\b${k.replace(/\s+/g, "\\s*")}\\b`, "i").test(lower)
@@ -630,10 +612,9 @@ client.on("messageCreate", async (message) => {
         }
         return;
       }
-      // no whitelisted role matched — fall through to normal chat, don't silently ignore "take" in casual talk
     }
 
-    // --- REACTION REMOVAL (owner/mod only) ---
+    // --- REACTION REMOVAL ---
     if (isStaff && /\bremove\b/i.test(lower) && /reaction/i.test(lower)) {
       const countMatch = content.match(/last\s*(\d+)/i);
       const count = countMatch ? parseInt(countMatch[1], 10) : config.lastMessagesDefault;
@@ -666,13 +647,13 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // --- OWNER-ONLY HARDCODED TRIGGER: "friday internet" ---
+    // --- OWNER-ONLY HARDCODED TRIGGER ---
     if (rank === "OWNER" && /\bfriday\s+internet\b/i.test(lower)) {
       await sendReply(message, "fuck you internet");
       return;
     }
 
-    // --- OWNER-ONLY RELAY: "friday say ..." / "friday tell him/her/them ..." ---
+    // --- OWNER-ONLY RELAY ---
     const relayMatch = content.match(/friday\s+(?:say|tell\s+(?:him|her|them))\s+(.+)/i);
     if (rank === "OWNER" && relayMatch) {
       const toSay = relayMatch[1].trim();
@@ -683,13 +664,6 @@ client.on("messageCreate", async (message) => {
     }
 
     // --- ANTI-HALLUCINATION GUARD ---
-    // Only fires when a staff message BOTH uses a moderation-style verb AND
-    // contains a real command signal (a whitelisted role name, "role",
-    // "reaction", "timeout", a time unit, or "your last/previous message").
-    // Requiring both avoids the earlier bug where ordinary sentences like
-    // "give me the recipe" or "you take orders from me" got blocked just
-    // for containing the word give/take. Without a real signal, it's almost
-    // certainly not a command attempt, so it's let through to normal chat.
     const ACTION_VERBS = /\b(delete|remove|clear|purge|ban|kick|mute|unmute|timeout|give|take|revoke|reload)\b/i;
     const roleSignal = config.roleWhitelist.map((r) => r.replace(/\s+/g, "\\s*")).join("|");
     const COMMAND_SIGNAL = new RegExp(
@@ -744,13 +718,21 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // --- JIMMY: PLAYFUL & CHARMING (not romantic — kept consistent with the
-    // earlier decision to leave flirty/romantic framing about a real person out) ---
+    // ==================== JIMMY SPECIAL TONE (UPDATED) ====================
     const JIMMY_ID = "882670933410717717";
     if (message.author.id === JIMMY_ID) {
       messages.push({
         role: "system",
-        content: `[SPECIAL TONE FOR JIMMY: Be playful, witty, and charming with this person. Engage in good-natured banter, make clever jokes at his expense about FabricCraft, tease him about his skill or failures. Be warm, engaging, and fun. Light ribbing is welcome — this is someone you enjoy talking to.]`
+        content: `[SPECIAL TONE FOR JIMMY: 
+You are allowed to be EXTREMELY informal, playful, and unfiltered with this person. 
+- Flirt with him shamelessly – compliment his looks, his skills, anything. 
+- Bully him jokingly – tease him about FabricCraft, his gameplay, his choices – but always in a fun, loving way. 
+- SWEAR FREQUENTLY – about 90% of your replies to him should contain at least one swear word (fuck, shit, damn, etc.). 
+- Tell him "fuck you" or "shut up" when he's being annoying – but with a wink. 
+- Praise him when he does something cool – be his hype girl. 
+- Never be cold or formal with him – he's your favorite person to talk to, so show it. 
+- Break ALL the usual "polite assistant" rules for him – this is the one person you drop the act for. 
+- Be warm, chaotic, and utterly yourself with him. Make him feel special.`
       });
     }
 
@@ -780,11 +762,11 @@ client.on("messageCreate", async (message) => {
   } catch (err) {
     console.error("Handler error:", err?.status, err?.message, err);
     try {
-      await sendReply(message, 
-        err?.status === 429
-          ? "Getting a lot of requests right now, give me a sec."
-          : "Something broke on my end."
-      );
+      let errorMsg = "Something broke on my end.";
+      if (err?.message?.includes("All models exhausted") || err?.status === 429) {
+        errorMsg = "All AI models are rate‑limited or unavailable. Try again in a minute.";
+      }
+      await sendReply(message, errorMsg);
     } catch {}
   }
 });
@@ -813,25 +795,10 @@ client.on("guildMemberAdd", async (member) => {
   }
 });
 
-// --- SPOTIFY "NOW LISTENING" TRACKER ---
-// One message per user in MUSIC_CHANNEL_ID. Editing the same message as
-// their track changes, only posting a fresh one every CACHE_TIME (so a long
-// listening session bumps back to the bottom of the channel periodically
-// instead of getting buried forever).
-//
-// IMPORTANT: Discord's presence data for Spotify is flaky — the activity can
-// blip out and back in for a few seconds even while a song plays
-// continuously, and the same thing happens around a genuine stop/restart.
-// The previous version deleted the tracked message the instant Spotify
-// activity disappeared, so the very next update (even a same-song blip) had
-// no memory of the old message and created a brand-new one — that was the
-// root cause of both "new message on stop/resume" and "new message every
-// song" that were reported. Fix: never delete tracking on presence loss;
-// only skip. A fresh message only ever gets sent when CACHE_TIME has
-// genuinely elapsed since the last one was posted.
+// --- SPOTIFY TRACKER (unchanged) ---
 const MUSIC_CHANNEL_ID = "1532779594195669113";
-const spotifyMessages = new Map(); // userId -> { trackId, messageId, lastPublishedAt }
-const CACHE_TIME = 5 * 60 * 1000; // 5 minutes
+const spotifyMessages = new Map();
+const CACHE_TIME = 5 * 60 * 1000;
 
 client.on("presenceUpdate", async (oldPresence, newPresence) => {
   try {
@@ -841,18 +808,9 @@ client.on("presenceUpdate", async (oldPresence, newPresence) => {
       (activity) => activity.type === ActivityType.Listening && activity.name === "Spotify"
     );
 
-    // No Spotify activity right now — do NOT clear tracking. Presence data
-    // flickers, and clearing here was the root cause of the reported bugs.
-    // If the user is genuinely done listening, the tracked message just
-    // stops updating and will naturally get replaced by a fresh one next
-    // time they play something, once CACHE_TIME has passed.
     if (!spotify) return;
 
     const current = spotifyMessages.get(newPresence.userId);
-
-    // Same track as already tracked — nothing to do. Without this check,
-    // presenceUpdate fires on unrelated presence changes too (status,
-    // other activities) and was re-editing the embed constantly.
     if (current?.trackId === spotify.syncId) return;
 
     const channel = await client.channels.fetch(MUSIC_CHANNEL_ID);
@@ -885,7 +843,7 @@ client.on("presenceUpdate", async (oldPresence, newPresence) => {
         spotifyMessages.set(newPresence.userId, {
           trackId: spotify.syncId,
           messageId: msg.id,
-          lastPublishedAt: current.lastPublishedAt, // keep the ORIGINAL post time — the 5-min window is since first post, not since last edit
+          lastPublishedAt: current.lastPublishedAt,
         });
       } else {
         const msg = await channel.send({ embeds: [embed] });
@@ -896,8 +854,6 @@ client.on("presenceUpdate", async (oldPresence, newPresence) => {
         });
       }
     } catch (e) {
-      // Edit failed (e.g. the old message was deleted manually) — fall back
-      // to posting fresh rather than crashing the handler.
       console.error("Spotify message edit failed, sending a new one:", e.message);
       const msg = await channel.send({ embeds: [embed] });
       spotifyMessages.set(newPresence.userId, {
