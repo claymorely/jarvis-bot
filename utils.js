@@ -92,7 +92,7 @@ export const CREEP_REGEX = new RegExp(
 );
 
 export const MINECRAFT_KEYWORDS =
-  /\b(minecraft|redstone|nether|ender|enderman|creeper|zombie|skeleton|villager|crafting|enchant|potion|bedrock|obsidian|diamond|netherite|hopper|piston|command block|mob|biome|dimension|end portal|mace|trident|elytra|totem|beacon|anvil|brewing|smithing|farm(?:ing)?\b.*\b(mc|minecraft)?)\b/i;
+  /\b(minecraft|redstone|nether|the end|ender|enderman|ender dragon|end portal|world border|wither|shulker|ghast|blaze|axolotl|warden|sculk|trial chambers|allay|piglin|strider|breeze|creaking|sniffer|camel|frog|goat|phantom|creeper|zombie|skeleton|villager|crafting|enchant|potion|bedrock|obsidian|diamond|netherite|hopper|piston|command block|mob|biome|dimension|mace|trident|elytra|totem|beacon|anvil|brewing|smithing|farm(?:ing)?\b.*\b(mc|minecraft)?)\b/i;
 
 export const REFUSALS = [
   "Yeah, no. Nice try though.",
@@ -299,7 +299,7 @@ const WIKI_GENERIC_TERMS = new Set([
 ]);
 const WIKI_UA = { "User-Agent": "jarvis-bot/1.0 (Discord bot)" };
 const WIKI_SIZE_QUESTION =
-  /(how (?:big|large|wide).{0,60}(?:world|overworld|nether|the end|dimension|map))|((?:world|overworld|nether|dimension).{0,20}(?:size|how big|how large))|(world size)/i;
+  /(how (?:big|large|wide).{0,60}(?:world|overworld|nether|the end|dimension|map))|((?:world|overworld|nether|dimension|end).{0,15}(?:size|border|how big|how large))|(world size)/i;
 
 async function wikiSearch(q, what, limit = 1) {
   const url = `https://minecraft.wiki/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&format=json&srlimit=${limit}&srwhat=${what}`;
