@@ -1,97 +1,75 @@
 import Groq from "groq-sdk";
-import OpenAI from "openai";
 
-let groq = null;
-let gemini = null;
-let cerebras = null;
+/** @type {import("groq-sdk").default[]} */
+let groqClients = [];
 
 export function initAI() {
-  if (process.env.GROQ_API_KEY) {
-    groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  }
+  const keys = [
+    process.env.GROQ_API_KEY,
+    process.env.GROQ_API_KEY_2,
+    process.env.GROQ_API_KEY_3,
+    process.env.GROQ_API_KEY_4,
+  ].filter((k) => k && k.trim());
 
-  if (process.env.GEMINI_API_KEY) {
-    gemini = new OpenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-    });
-  }
+  groqClients = keys.map((apiKey) => new Groq({ apiKey }));
 
-  if (process.env.CEREBRAS_API_KEY) {
-    cerebras = new OpenAI({
-      apiKey: process.env.CEREBRAS_API_KEY,
-      baseURL: "https://api.cerebras.ai/v1",
-    });
+  if (groqClients.length === 0) {
+    console.warn("No GROQ_API_KEY* set — AI will not work");
+  } else {
+    console.log(`Initialized ${groqClients.length} Groq API key(s)`);
   }
 }
 
+/**
+ * Priority order from config.models.
+ * For provider "groq", tries every available key before moving to the next model.
+ */
 export async function ask(messages, config) {
   const models = config.models || [];
   if (models.length === 0) throw new Error("No models configured");
+  if (groqClients.length === 0) throw new Error("No Groq keys configured");
 
   let lastError = null;
 
   for (const entry of models) {
     const { provider, model } = entry;
 
-    try {
-      if (provider === "groq") {
-        if (!groq) {
-          console.warn("Groq not configured, skipping");
-          continue;
-        }
-        return await groq.chat.completions.create({
+    if (provider !== "groq") {
+      console.warn(`Unknown/unsupported provider "${provider}", skipping`);
+      continue;
+    }
+
+    for (let i = 0; i < groqClients.length; i++) {
+      const client = groqClients[i];
+      try {
+        const completion = await client.chat.completions.create({
           model,
           max_tokens: 220,
           temperature: 0.8,
           messages,
         });
-      }
-
-      if (provider === "gemini") {
-        if (!gemini) {
-          console.warn("Gemini not configured, skipping");
+        return completion;
+      } catch (e) {
+        lastError = e;
+        const status = e?.status || e?.response?.status || e?.statusCode;
+        if (
+          status === 400 ||
+          status === 404 ||
+          status === 402 ||
+          status === 429 ||
+          (status >= 500 && status < 600)
+        ) {
+          console.warn(
+            `Groq key#${i + 1} model ${model} failed (${status}), trying next...`
+          );
           continue;
         }
-        return await gemini.chat.completions.create({
-          model,
-          max_tokens: 220,
-          temperature: 0.8,
-          messages,
-        });
+        throw e;
       }
-
-      if (provider === "cerebras") {
-        if (!cerebras) {
-          console.warn("Cerebras not configured, skipping");
-          continue;
-        }
-        return await cerebras.chat.completions.create({
-          model,
-          max_tokens: 220,
-          temperature: 0.8,
-          messages,
-        });
-      }
-
-      console.warn(`Unknown provider "${provider}", skipping`);
-    } catch (e) {
-      lastError = e;
-      const status = e?.status || e?.response?.status || e?.statusCode;
-      if (
-        status === 400 ||
-        status === 402 ||
-        status === 429 ||
-        (status >= 500 && status < 600)
-      ) {
-        console.warn(`Model ${provider}/${model} failed (${status}), trying next...`);
-        continue;
-      }
-      throw e;
     }
   }
 
-  const exhausted = lastError || new Error("All models exhausted");
+  const exhausted = lastError || new Error("All models/keys exhausted");
   exhausted.allModelsFailed = true;
   throw exhausted;
 }
