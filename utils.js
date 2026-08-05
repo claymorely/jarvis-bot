@@ -312,21 +312,47 @@ function wikiKeywords(query) {
   return query.toLowerCase().replace(WIKI_FILLER, " ").replace(/\s+/g, " ").trim();
 }
 
+async function wikiOpenSearch(q) {
+  const url = `https://minecraft.wiki/api.php?action=opensearch&search=${encodeURIComponent(q)}&limit=5&format=json`;
+  const res = await fetch(url, { headers: WIKI_UA, signal: AbortSignal.timeout(5000) });
+  const data = await res.json();
+  return Array.isArray(data?.[1]) ? data[1] : [];
+}
+
+async function wikiPrefixSearch(q) {
+  const url = `https://minecraft.wiki/api.php?action=query&list=prefixsearch&pssearch=${encodeURIComponent(q)}&pslimit=5&format=json`;
+  const res = await fetch(url, { headers: WIKI_UA, signal: AbortSignal.timeout(5000) });
+  const data = await res.json();
+  return (data?.query?.prefixsearch || []).map((s) => s.title);
+}
+
 async function collectWikiCandidates(query) {
   const keywords = wikiKeywords(query);
+  const tokens = (keywords || "").split(" ").filter((t) => t.length > 2);
+  const phraseQs = [...new Set([keywords, tokens.slice(-2).join(" ")].filter(Boolean))];
+
   const cands = [];
   const seen = new Set();
   const add = (t) => {
-    if (!t || seen.has(t) || WIKI_JUNK_TITLE.test(t)) return;
+    if (!t || seen.has(t) || WIKI_JUNK_TITLE.test(t) || /disambiguation/i.test(t) || /\//.test(t) || /\.png/i.test(t)) return;
     seen.add(t);
     cands.push(t);
   };
+
   if (WIKI_SIZE_QUESTION.test(query)) add("World boundary");
+
+  const [osHits, psHits] = await Promise.all([
+    Promise.all(phraseQs.map((q) => wikiOpenSearch(q))),
+    Promise.all(phraseQs.map((q) => wikiPrefixSearch(q))),
+  ]);
+  osHits.flat().forEach(add);
+  psHits.flat().forEach(add);
+
   for (const q of [...new Set([query, keywords].filter(Boolean))]) {
     const [hit] = await wikiSearch(q, "nearmatch");
     add(hit);
   }
-  for (const tok of (keywords || "").split(" ").filter((t) => t.length > 2 && !WIKI_GENERIC_TERMS.has(t))) {
+  for (const tok of tokens.filter((t) => !WIKI_GENERIC_TERMS.has(t))) {
     const [hit] = await wikiSearch(tok, "nearmatch");
     add(hit);
   }
@@ -388,7 +414,7 @@ export async function fetchWikiContext(query) {
       done.add(title);
       const text = await fetchWikiExtract(title);
       if (!text) continue;
-      if (/april fools/i.test(text.slice(0, 600))) continue;
+      if (/disambiguation/i.test(title) || /april fools/i.test(text.slice(0, 600))) continue;
       const ptr = text.match(/[Ff]or\s+[^.,\n]{2,80}?\s*,?\s+in\s+other\s+editions,\s*see\s+([A-Z][^.,\n]{2,60})/);
       if (ptr && !WIKI_JUNK_TITLE.test(ptr[1])) {
         want.add(ptr[1].trim());
