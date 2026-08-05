@@ -23,7 +23,6 @@ export const DEFAULT_CONFIG = {
   memoryMaxTurns: 10,
   models: [
     { provider: "groq", model: "llama-3.3-70b-versatile" },
-    { provider: "deepseek", model: "deepseek-chat" },
     { provider: "groq", model: "llama-3.1-8b-instant" },
   ],
   specialTones: {},
@@ -300,9 +299,70 @@ export function getSpecialTone(userId, config) {
 export const SPECIAL_TONE_PROMPTS = {
   JIMMY: `[SPECIAL TONE FOR JIMMY:
 You can be extremely informal, playful, and unfiltered with this person.
-- Flirt shamelessly and tease him about FabricCraft / gameplay.
+- Flirt shamelessly and tease him about anything.
 - Swear freely — most replies to him should have at least one swear.
 - Tell him "fuck you" or "shut up" when he's annoying, but with a wink.
 - Hype him up when he does something cool.
-- Drop the polite-assistant act entirely. Be warm, chaotic, and yourself.]`,
+- Drop the polite-assistant act entirely. Be warm, chaotic, and flirty.]`,
 };
+
+// --- PERMANENT MEMORY (survives friday reset) ---
+export const PERM_MEMORY_PATH = "./permanent-memory.json";
+
+export function loadPermanentMemory() {
+  try {
+    if (!fs.existsSync(PERM_MEMORY_PATH)) return [];
+    const raw = JSON.parse(fs.readFileSync(PERM_MEMORY_PATH, "utf8"));
+    return Array.isArray(raw.facts) ? raw.facts : [];
+  } catch (e) {
+    console.error("Failed to load permanent memory:", e.message);
+    return [];
+  }
+}
+
+export function savePermanentMemory(facts) {
+  try {
+    fs.writeFileSync(PERM_MEMORY_PATH, JSON.stringify({ facts }, null, 2));
+  } catch (e) {
+    console.error("Failed to save permanent memory:", e.message);
+  }
+}
+
+export function addPermanentFact(text) {
+  const facts = loadPermanentMemory();
+  const cleaned = text.trim();
+  if (!cleaned) return { ok: false, reason: "empty" };
+  if (facts.some((f) => f.toLowerCase() === cleaned.toLowerCase())) {
+    return { ok: false, reason: "duplicate" };
+  }
+  facts.push(cleaned);
+  savePermanentMemory(facts);
+  return { ok: true, facts };
+}
+
+export function removePermanentFact(query) {
+  const facts = loadPermanentMemory();
+  const q = query.trim().toLowerCase();
+  const asNum = parseInt(query.trim(), 10);
+  if (!Number.isNaN(asNum) && asNum >= 1 && asNum <= facts.length) {
+    const removed = facts.splice(asNum - 1, 1)[0];
+    savePermanentMemory(facts);
+    return { ok: true, removed, facts };
+  }
+  const idx = facts.findIndex((f) => f.toLowerCase().includes(q));
+  if (idx === -1) return { ok: false, reason: "not_found", facts };
+  const removed = facts.splice(idx, 1)[0];
+  savePermanentMemory(facts);
+  return { ok: true, removed, facts };
+}
+
+export function clearPermanentMemory() {
+  savePermanentMemory([]);
+}
+
+export function formatPermanentMemoryForPrompt() {
+  const facts = loadPermanentMemory();
+  if (facts.length === 0) return null;
+  const list = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+  return `[PERMANENT MEMORY — facts Clay taught you. Treat these as true. They survive reset. Do not invent extra facts beyond this list and the system prompt.]\n${list}`;
+}
