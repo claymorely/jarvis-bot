@@ -15,22 +15,8 @@
   "roleWhitelist": ["iron", "gold", "emerald", "diamond", "ruby", "netherite", "gif perms"],
   "memoryMaxTurns": 10,
   "models": [
-    {
-      "provider": "groq",
-      "model": "llama-3.3-70b-versatile"
-    },
-    {
-      "provider": "gemini",
-      "model": "gemini-2.5-flash"
-    },
-    {
-      "provider": "cerebras",
-      "model": "llama-3.3-70b"
-    },
-    {
-      "provider": "groq",
-      "model": "llama-3.1-8b-instant"
-    }
+    { "provider": "groq", "model": "llama-3.3-70b-versatile" },
+    { "provider": "groq", "model": "llama-3.1-8b-instant" }
   ],
   "specialTones": {
     "882670933410717717": "JIMMY"
