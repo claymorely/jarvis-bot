@@ -11,5 +11,12 @@
   "muteDefaultMinutes": 5,
   "muteMaxMinutes": 1440,
   "lastMessagesDefault": 20,
-  "roleWhitelist": ["iron", "gold", "emerald", "diamond", "ruby", "netherite", "gif perms"]
+  "roleWhitelist": ["iron", "gold", "emerald", "diamond", "ruby", "netherite", "gif perms"],
+
+  "models": [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it"
+  ]
 }
