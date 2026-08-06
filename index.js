@@ -21,7 +21,6 @@ import {
   getSpecialTone,
   SPECIAL_TONE_PROMPTS,
   fetchWikiContext,
-  searchWeb,
   INJECTION_REGEX,
   SLANDER_REGEX,
   CREEP_REGEX,
@@ -254,31 +253,15 @@ client.on("messageCreate", async (message) => {
       messages.push({ role: "system", content: permNote });
     }
 
-    // Minecraft wiki context (+ web search fallback)
+    // Minecraft wiki context
     if (MINECRAFT_KEYWORDS.test(lower)) {
       await message.channel.sendTyping();
       const wiki = await fetchWikiContext(content);
       if (wiki) {
         messages.push({
           role: "system",
-          content: `[WIKI LOOKUP — ${wiki.title} (${wiki.url})]\n${wiki.extract}\n\nAnswer the question directly using the facts above (tables and numbers included) — the answer is usually in there, so look carefully. If multiple editions are mentioned, answer for Java Edition by default. Only say "I'm not sure" if the text truly does not address the question. Never invent facts.`,
+          content: `[WIKI LOOKUP — "${wiki.title}"]\n${wiki.extract}\n\nUse the above as your source of truth for this question if it's relevant. If it doesn't actually answer what was asked, say you're not sure rather than guessing.`,
         });
-      } else {
-        const web = await searchWeb(content);
-        if (web?.results?.length) {
-          messages.push({
-            role: "system",
-            content: `[WEB SEARCH — "${web.query}"]\n${web.results
-              .slice(0, 4)
-              .map((r, i) => `${i + 1}. ${r.title} — ${r.snippet}\n   (${r.url})`)
-              .join("\n")}\n\nAnswer the question using these search results as your source, citing the result(s) you used. If none actually answer it, say you're not sure rather than guessing.`,
-          });
-        } else {
-          messages.push({
-            role: "system",
-            content: `[WIKI LOOKUP FAILED — no source retrieved]\nIf you cannot answer this Minecraft question confidently from your own knowledge, say you're not sure rather than guessing. Prefer admitting uncertainty over inventing details.`,
-          });
-        }
       }
     }
 
@@ -298,8 +281,10 @@ client.on("messageCreate", async (message) => {
     if (!reply) reply = "..?";
     if (reply.length > MAX_REPLY) reply = reply.slice(0, MAX_REPLY) + "…";
 
-    // Output safety
-    if (SLANDER_REGEX.test(reply) || CREEP_REGEX.test(reply)) {
+    // Output safety — still block slander always.
+    // Creep filter is relaxed for special-tone users (e.g. Jimmy) so flirty banter isn't killed.
+    const hasSpecialTone = !!(toneKey && SPECIAL_TONE_PROMPTS[toneKey]);
+    if (SLANDER_REGEX.test(reply) || (!hasSpecialTone && CREEP_REGEX.test(reply))) {
       logViolation("BLOCKED_OUTPUT", "friday", reply);
       await sendReply(message, "Not saying that.");
       return;
