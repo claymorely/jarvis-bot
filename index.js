@@ -208,10 +208,16 @@ client.on("messageCreate", async (message) => {
             onlyFriday,
             client.user.id
           );
-          await sendReply(message, `Deleted ${deleted} message(s).`);
+          try {
+            await message.channel.send(`Deleted ${deleted} message(s).`);
+          } catch (e2) {
+            console.error("Purge confirm failed:", e2.message);
+          }
         } catch (e) {
           console.error("Purge failed:", e.message);
-          await sendReply(message, "Couldn't delete — need Manage Messages?");
+          try {
+            await message.channel.send("Couldn't delete — need Manage Messages?");
+          } catch {}
         }
         return;
       }
@@ -291,7 +297,8 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    if (CREEP_REGEX.test(content)) {
+    const toneKeyEarly = getSpecialTone(message.author.id, config);
+    if (CREEP_REGEX.test(content) && !toneKeyEarly) {
       logViolation("CREEP", username, content);
       await sendReply(message, pick(CREEP_REPLIES));
       return;
@@ -330,7 +337,7 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    const toneKey = getSpecialTone(message.author.id, config);
+    const toneKey = toneKeyEarly || getSpecialTone(message.author.id, config);
     if (toneKey && SPECIAL_TONE_PROMPTS[toneKey]) {
       messages.push({ role: "system", content: SPECIAL_TONE_PROMPTS[toneKey] });
     }
