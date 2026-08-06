@@ -18,6 +18,7 @@ export function initAI() {
     process.env.GROQ_API_KEY_8,
     process.env.GROQ_API_KEY_9,
     process.env.GROQ_API_KEY_10,
+    process.env.GROQ_API_KEY_11,
   ].filter((k) => k && k.trim());
 
   groqClients = keys.map((apiKey) => new Groq({ apiKey }));
@@ -31,8 +32,7 @@ export function initAI() {
 }
 
 function keyIsCoolingDown(i) {
-  const until = keyCooldownUntil.get(i) || 0;
-  return Date.now() < until;
+  return Date.now() < (keyCooldownUntil.get(i) || 0);
 }
 
 function markKeyRateLimited(i) {
@@ -48,7 +48,6 @@ export async function ask(messages, config) {
 
   for (const entry of models) {
     const { provider, model } = entry;
-
     if (provider !== "groq") {
       console.warn(`Unknown/unsupported provider "${provider}", skipping`);
       continue;
@@ -57,12 +56,11 @@ export async function ask(messages, config) {
     for (let i = 0; i < groqClients.length; i++) {
       if (keyIsCoolingDown(i)) continue;
 
-      const client = groqClients[i];
       try {
-        const completion = await client.chat.completions.create({
+        const completion = await groqClients[i].chat.completions.create({
           model,
-          max_tokens: 140,
-          temperature: 0.8,
+          max_tokens: 80,
+          temperature: 0.75,
           messages,
         });
         return completion;
