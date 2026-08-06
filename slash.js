@@ -338,9 +338,20 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
           await interaction.reply({ content: "Couldn't find that member.", ...ephemeral });
           return;
         }
-        const ms = Math.min(minutes, config.muteMaxMinutes || 1440) * 60 * 1000;
-        await member.timeout(ms, `Muted by ${interaction.user.username}`);
-        await interaction.reply({ content: `Muted ${user.username} for ${minutes}m.`, ...ephemeral });
+        const appliedMinutes = Math.min(minutes, config.muteMaxMinutes || 1440);
+        try {
+          await member.timeout(appliedMinutes * 60 * 1000, `Muted by ${interaction.user.username}`);
+        } catch (e) {
+          await interaction.reply({
+            content: "Couldn't do that — check my Timeout Members permission.",
+            ...ephemeral,
+          });
+          return;
+        }
+        await interaction.reply({
+          content: `Muted ${user.username} for ${appliedMinutes}m.`,
+          ...ephemeral,
+        });
         return;
       }
 
