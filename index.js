@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, AttachmentBuilder } from "discord.js";
+import { Client, GatewayIntentBits, AttachmentBuilder, Partials } from "discord.js";
 import fs from "fs";
 
 import {
@@ -41,11 +41,11 @@ import { initAI, ask } from "./ai.js";
 import { registerFont, generateWelcomeCard } from "./welcome.js";
 import { handleModerationCommands, sendReply } from "./moderation.js";
 import { registerSpotifyTracker } from "./spotify.js";
+import { registerSlashCommands, createInteractionHandler } from "./slash.js";
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
 
-// --- ENV CHECK ---
 if (!process.env.DISCORD_TOKEN) {
   console.error("FATAL: DISCORD_TOKEN is missing");
   process.exit(1);
@@ -55,7 +55,6 @@ if (!process.env.GROQ_API_KEY) {
   process.exit(1);
 }
 
-// --- INIT ---
 let config = loadConfig();
 initAI();
 registerFont();
@@ -65,7 +64,6 @@ fs.watchFile(CONFIG_PATH, { interval: 2000 }, () => {
   console.log("config.json reloaded");
 });
 
-// --- CLIENT ---
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -75,9 +73,9 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.GuildPresences,
   ],
+  partials: [Partials.Channel],
 });
 
-// Simple reply queue so messages don't stampede
 let chain = Promise.resolve();
 function queued(fn) {
   const run = chain.then(fn, fn);
@@ -88,13 +86,47 @@ function queued(fn) {
   return run;
 }
 
-client.once("clientReady", () => {
+const OFF_LINES = ["See you soon.", "Going quiet.", "Later.", "Catch you later.", "Off for now."];
+const ON_LINES = ["Back online.", "I'm here.", "Miss me?", "Online again.", "Ready."];
+
+async function purgeChannel(channel, count, onlyFriday, botId) {
+  let deleted = 0;
+  let remaining = count;
+  while (remaining > 0) {
+    const fetchSize = Math.min(100, remaining);
+    const fetched = await channel.messages.fetch({ limit: fetchSize });
+    if (fetched.size === 0) break;
+    const filtered = onlyFriday ? fetched.filter((m) => m.author.id === botId) : fetched;
+    const young = filtered.filter(
+      (m) => Date.now() - m.createdTimestamp < 14 * 24 * 60 * 60 * 1000
+    );
+    if (young.size === 0) break;
+    const result = await channel.bulkDelete(young, true);
+    deleted += result.size;
+    remaining -= result.size;
+    if (result.size === 0) break;
+  }
+  return deleted;
+}
+
+client.once("clientReady", async () => {
   console.log(`Logged in as ${client.user.tag}`);
+  await registerSlashCommands(client);
 });
 
 client.on("error", (e) => console.error("Discord client error:", e));
 
-// --- MESSAGE HANDLER ---
+client.on("interactionCreate", (interaction) => {
+  return createInteractionHandler({
+    client,
+    config,
+    ask,
+    loadSystemPrompt,
+    clean,
+    MAX_REPLY,
+  })(interaction);
+});
+
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot || !message.guild) return;
@@ -102,7 +134,6 @@ client.on("messageCreate", async (message) => {
     const content = message.content.trim();
     const lower = content.toLowerCase();
 
-    // Ping block
     if (
       config.pingBlockUserIds.some(
         (id) => content.includes(`<@${id}>`) || content.includes(`<@!${id}>`)
@@ -125,20 +156,18 @@ client.on("messageCreate", async (message) => {
       message.mentions.has(client.user) ||
       config.triggers.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
 
-    // Owner on/off toggle
     if (named && rank === "OWNER" && /\bfriday\s+off\b/i.test(lower)) {
       setFridayEnabled(false);
-      await sendReply(message, "Going quiet. Say \"friday on\" to bring me back.");
+      await sendReply(message, pick(OFF_LINES));
       return;
     }
     if (named && rank === "OWNER" && /\bfriday\s+on\b/i.test(lower)) {
       setFridayEnabled(true);
-      await sendReply(message, "Back online.");
+      await sendReply(message, pick(ON_LINES));
       return;
     }
     if (!isFridayEnabled()) return;
 
-    // Reset short-term chat history only (permanent memory stays)
     if (named && /\breset\b/i.test(lower) && !/\breset\s+memory\b/i.test(lower)) {
       if (rank === "OWNER" || rank === "MOD") {
         clearMemory(message.channel.id);
@@ -149,7 +178,45 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // Permanent memory commands (owner only)
+    // Purge / delete last N
+    if (named && (rank === "OWNER" || rank === "MOD")) {
+      const selfPurge = content.match(
+        /\b(?:delete|purge)\s+(?:your|my|friday(?:'s)?)\s+(?:last\s+)?(\d+)\b/i
+      );
+      const allPurge = content.match(
+        /\b(?:delete|purge)\s+(?:the\s+)?last\s+(\d+)(?:\s+messages?)?\b/i
+      );
+      if (selfPurge || allPurge) {
+        const onlyFriday = !!selfPurge;
+        const n = parseInt((selfPurge || allPurge)[1], 10);
+        const max = rank === "OWNER" ? 500 : 10;
+        if (!n || n < 1) {
+          await sendReply(message, "Give me a number.");
+          return;
+        }
+        if (n > max) {
+          await sendReply(
+            message,
+            rank === "OWNER" ? `Cap is ${max}.` : "Mods can delete at most 10."
+          );
+          return;
+        }
+        try {
+          const deleted = await purgeChannel(
+            message.channel,
+            n,
+            onlyFriday,
+            client.user.id
+          );
+          await sendReply(message, `Deleted ${deleted} message(s).`);
+        } catch (e) {
+          console.error("Purge failed:", e.message);
+          await sendReply(message, "Couldn't delete — need Manage Messages?");
+        }
+        return;
+      }
+    }
+
     if (named && rank === "OWNER") {
       if (/\breset\s+memory\b/i.test(lower)) {
         clearPermanentMemory();
@@ -176,20 +243,28 @@ client.on("messageCreate", async (message) => {
         const result = removePermanentFact(forgetMatch[1]);
         if (!result.ok) {
           await sendReply(message, "Couldn't find that in permanent memory.");
+        } else if (result.range) {
+          await sendReply(message, `Forgot ${result.removed.length} fact(s).`);
         } else {
-          await sendReply(message, `Forgot: ${result.removed}`);
+          const r = Array.isArray(result.removed) ? result.removed[0] : result.removed;
+          await sendReply(message, `Forgot: ${r}`);
         }
         return;
       }
 
       if (/\bmemory\b/i.test(lower) && !/\breset\b/i.test(lower)) {
         const facts = loadPermanentMemory();
-        if (facts.length === 0) {
-          await sendReply(message, "Permanent memory is empty.");
-        } else {
-          const list = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
-          const reply = list.length > 1800 ? list.slice(0, 1800) + "…" : list;
-          await sendReply(message, `Permanent memory:\n${reply}`);
+        try {
+          if (facts.length === 0) {
+            await message.author.send("Permanent memory is empty.");
+          } else {
+            const list = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+            const text = list.length > 1800 ? list.slice(0, 1800) + "…" : list;
+            await message.author.send(`Permanent memory:\n${text}`);
+          }
+          await sendReply(message, "Sent you a DM.");
+        } catch {
+          await sendReply(message, "Couldn't DM you — open your DMs.");
         }
         return;
       }
@@ -197,20 +272,16 @@ client.on("messageCreate", async (message) => {
 
     if (!named) return;
 
-    // Per-user cooldown
     if (!checkCooldown(message.author.id, config)) return;
 
-    // Staff moderation commands
     const handled = await handleModerationCommands(message, content, lower, config, displayName);
     if (handled) return;
 
-    // Owner-only hardcoded trigger
     if (rank === "OWNER" && /\bfriday\s+internet\b/i.test(lower)) {
       await sendReply(message, "fuck you internet");
       return;
     }
 
-    // Owner-only relay
     const relayMatch = content.match(/friday\s+(?:say|tell\s+(?:him|her|them))\s+(.+)/i);
     if (rank === "OWNER" && relayMatch) {
       const toSay = relayMatch[1].trim();
@@ -220,40 +291,34 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // Creep guard
     if (CREEP_REGEX.test(content)) {
       logViolation("CREEP", username, content);
       await sendReply(message, pick(CREEP_REPLIES));
       return;
     }
 
-    // Injection / slander guard
     if (INJECTION_REGEX.test(content) || SLANDER_REGEX.test(content)) {
       logViolation("INJECTION/SLANDER", username, content);
       await sendReply(message, pick(REFUSALS));
       return;
     }
 
-    // Global rate limit
     if (!globalRateLimitOk(config)) {
       await sendReply(message, "Too many requests right now, give it a few seconds.");
       return;
     }
 
-    // Build messages for the model
     const history = getMemory(message.channel.id);
     const tag = `[${rank}]`;
     const userLine = `${tag} [display name: ${displayName}] says: ${content}`;
 
     const messages = [{ role: "system", content: loadSystemPrompt() }, ...history];
 
-    // Permanent memory (owner-taught facts that survive reset)
     const permNote = formatPermanentMemoryForPrompt();
     if (permNote) {
       messages.push({ role: "system", content: permNote });
     }
 
-    // Minecraft wiki context
     if (MINECRAFT_KEYWORDS.test(lower)) {
       await message.channel.sendTyping();
       const wiki = await fetchWikiContext(content);
@@ -265,7 +330,6 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // Special tone (e.g. Jimmy)
     const toneKey = getSpecialTone(message.author.id, config);
     if (toneKey && SPECIAL_TONE_PROMPTS[toneKey]) {
       messages.push({ role: "system", content: SPECIAL_TONE_PROMPTS[toneKey] });
@@ -281,8 +345,6 @@ client.on("messageCreate", async (message) => {
     if (!reply) reply = "..?";
     if (reply.length > MAX_REPLY) reply = reply.slice(0, MAX_REPLY) + "…";
 
-    // Output safety — still block slander always.
-    // Creep filter is relaxed for special-tone users (e.g. Jimmy) so flirty banter isn't killed.
     const hasSpecialTone = !!(toneKey && SPECIAL_TONE_PROMPTS[toneKey]);
     if (SLANDER_REGEX.test(reply) || (!hasSpecialTone && CREEP_REGEX.test(reply))) {
       logViolation("BLOCKED_OUTPUT", "friday", reply);
@@ -309,7 +371,6 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// --- WELCOME ---
 client.on("guildMemberAdd", async (member) => {
   try {
     const channel = member.guild.channels.cache.get(config.welcomeChannelId);
@@ -334,10 +395,8 @@ client.on("guildMemberAdd", async (member) => {
   }
 });
 
-// --- SPOTIFY ---
 registerSpotifyTracker(client, config);
 
-// --- LOGIN ---
 client.login(process.env.DISCORD_TOKEN).catch((e) => {
   console.error("LOGIN FAILED:", e?.message || e);
   process.exit(1);
