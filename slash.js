@@ -8,7 +8,10 @@ import {
   clearMemory,
   isFridayEnabled,
   setFridayEnabled,
+  saveConfig,
+  CHAT_EDITABLE_KEYS,
 } from "./utils.js";
+import { getGroqKeyCount } from "./ai.js";
 
 export function buildSlashCommands() {
   return [
@@ -23,6 +26,24 @@ export function buildSlashCommands() {
       .addStringOption((o) => o.setName("query").setDescription("Number, range, or text").setRequired(true)),
     new SlashCommandBuilder().setName("resetmemory").setDescription("Wipe permanent memory (owner only)"),
     new SlashCommandBuilder().setName("status").setDescription("Bot status (owner only)"),
+    new SlashCommandBuilder()
+      .setName("setconfig")
+      .setDescription("Change a runtime setting (owner only)")
+      .addStringOption((o) =>
+        o
+          .setName("key")
+          .setDescription("Which setting")
+          .setRequired(true)
+          .addChoices(
+            ...CHAT_EDITABLE_KEYS.map((k) => ({ name: k, value: k }))
+          )
+      )
+      .addStringOption((o) =>
+        o.setName("value").setDescription("New value (number)").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("getconfig")
+      .setDescription("Show current runtime settings (owner only)"),
     new SlashCommandBuilder()
       .setName("say")
       .setDescription("Make Friday say something (owner only)")
@@ -110,15 +131,16 @@ async function purgeMessages(channel, count, onlyFriday, botId) {
   return deleted;
 }
 
-export function createInteractionHandler({ client, config, ask, loadSystemPrompt, clean, MAX_REPLY }) {
+export function createInteractionHandler({ client, getConfig, ask, loadSystemPrompt, clean, MAX_REPLY }) {
   return async function onInteraction(interaction) {
     if (!interaction.isChatInputCommand()) return;
 
+    const config = getConfig();
     const rank = rankOf(interaction.user, config);
     const name = interaction.commandName;
     const ephemeral = { flags: MessageFlags.Ephemeral };
 
-    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "say", "friday"];
+    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "setconfig", "getconfig", "say", "friday"];
     const staffOnly = ["clear", "mute", "unmute", "warn", "purge"];
 
     if (ownerOnly.includes(name) && rank !== "OWNER") {
@@ -184,19 +206,49 @@ export function createInteractionHandler({ client, config, ask, loadSystemPrompt
 
       if (name === "status") {
         const facts = loadPermanentMemory();
-        const keys = [
-          process.env.GROQ_API_KEY,
-          process.env.GROQ_API_KEY_2,
-          process.env.GROQ_API_KEY_3,
-          process.env.GROQ_API_KEY_4,
-        ].filter(Boolean).length;
+        const cfg = getConfig();
         await interaction.reply({
           content: [
             `Friday: ${isFridayEnabled() ? "ON" : "OFF"}`,
-            `Groq keys: ${keys}`,
+            `Groq keys: ${getGroqKeyCount()}`,
             `Permanent facts: ${facts.length}`,
             `Guilds: ${client.guilds.cache.size}`,
+            `Cooldown: ${cfg.cooldownMs}ms`,
+            `Rate limit: ${cfg.globalMaxCalls} calls / ${cfg.globalWindowMs}ms`,
           ].join("\n"),
+          ...ephemeral,
+        });
+        return;
+      }
+
+      if (name === "setconfig") {
+        const key = interaction.options.getString("key", true);
+        const raw = interaction.options.getString("value", true).trim();
+        if (!CHAT_EDITABLE_KEYS.includes(key)) {
+          await interaction.reply({ content: `"${key}" can't be changed through chat.`, ...ephemeral });
+          return;
+        }
+        const value = Number(raw);
+        if (!Number.isFinite(value)) {
+          await interaction.reply({ content: "Value must be a number.", ...ephemeral });
+          return;
+        }
+        const old = getConfig()[key];
+        const cfg = getConfig();
+        cfg[key] = value;
+        saveConfig(cfg);
+        await interaction.reply({
+          content: `Set ${key}: ${old} -> ${value}.`,
+          ...ephemeral,
+        });
+        return;
+      }
+
+      if (name === "getconfig") {
+        const cfg = getConfig();
+        const lines = CHAT_EDITABLE_KEYS.map((k) => `${k} = ${cfg[k]}`).join("\n");
+        await interaction.reply({
+          content: `Current settings:\n\`\`\`\n${lines}\n\`\`\``,
           ...ephemeral,
         });
         return;

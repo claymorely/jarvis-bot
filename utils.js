@@ -1,9 +1,11 @@
 import fs from "fs";
 import path from "path";
 
-export const CONFIG_PATH = "./config.json";
+export const DATA_DIR = process.env.DATA_DIR || ".";
+export const CONFIG_PATH = path.join(DATA_DIR, "config.json");
+export const BUNDLED_CONFIG_PATH = "./config.json";
 export const SYSTEM_PROMPT_PATH = "./system-prompt.txt";
-export const LOG_PATH = "./friday-violations.log";
+export const LOG_PATH = path.join(DATA_DIR, "friday-violations.log");
 
 export const DEFAULT_CONFIG = {
   triggers: ["friday"],
@@ -113,7 +115,45 @@ const lastBotMessageIds = new Map();
 let globalCallTimestamps = [];
 let fridayEnabled = true;
 
+function ensureConfigFile() {
+  if (DATA_DIR === "." || fs.existsSync(CONFIG_PATH)) {
+    if (DATA_DIR !== "." && fs.existsSync(CONFIG_PATH) && fs.existsSync(BUNDLED_CONFIG_PATH)) {
+      try {
+        const vol = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+        const bundled = JSON.parse(fs.readFileSync(BUNDLED_CONFIG_PATH, "utf8"));
+        const merge = (a, b) => [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])])];
+        const ownerIds = merge(vol.ownerIds, bundled.ownerIds);
+        const modIds = merge(vol.modIds, bundled.modIds);
+        if (
+          ownerIds.length !== (vol.ownerIds || []).length ||
+          modIds.length !== (vol.modIds || []).length
+        ) {
+          vol.ownerIds = ownerIds;
+          vol.modIds = modIds;
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(vol, null, 2));
+          console.log("Merged owner/mod IDs from bundled config into", CONFIG_PATH);
+        }
+      } catch (e) {
+        console.error("Failed to merge owner/mod IDs into config.json:", e.message);
+      }
+    }
+    return;
+  }
+  try {
+    if (fs.existsSync(BUNDLED_CONFIG_PATH)) {
+      fs.copyFileSync(BUNDLED_CONFIG_PATH, CONFIG_PATH);
+      console.log("Seeded config.json from bundled copy ->", CONFIG_PATH);
+    } else {
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
+      console.log("Wrote default config.json ->", CONFIG_PATH);
+    }
+  } catch (e) {
+    console.error("Failed to seed config.json:", e.message);
+  }
+}
+
 export function loadConfig() {
+  ensureConfigFile();
   try {
     const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
     return { ...DEFAULT_CONFIG, ...raw };
@@ -307,7 +347,7 @@ You can be extremely informal, playful, and unfiltered with this person.
 };
 
 // --- PERMANENT MEMORY (survives friday reset) ---
-export const PERM_MEMORY_PATH = "./permanent-memory.json";
+export const PERM_MEMORY_PATH = path.join(DATA_DIR, "permanent-memory.json");
 
 export function loadPermanentMemory() {
   try {

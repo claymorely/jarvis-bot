@@ -119,7 +119,7 @@ client.on("error", (e) => console.error("Discord client error:", e));
 client.on("interactionCreate", (interaction) => {
   return createInteractionHandler({
     client,
-    config,
+    getConfig: () => config,
     ask,
     loadSystemPrompt,
     clean,

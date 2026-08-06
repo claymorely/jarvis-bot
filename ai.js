@@ -39,6 +39,10 @@ function markKeyRateLimited(i) {
   keyCooldownUntil.set(i, Date.now() + KEY_COOLDOWN_MS);
 }
 
+export function getGroqKeyCount() {
+  return groqClients.length;
+}
+
 export async function ask(messages, config) {
   const models = config.models || [];
   if (models.length === 0) throw new Error("No models configured");
