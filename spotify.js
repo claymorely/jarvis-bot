@@ -3,7 +3,7 @@ import { ActivityType, EmbedBuilder } from "discord.js";
 const CACHE_TIME = 5 * 60 * 1000;
 const spotifyMessages = new Map();
 
-export function registerSpotifyTracker(client, getConfig) {
+export function registerSpotifyTracker(client, config) {
   client.on("presenceUpdate", async (oldPresence, newPresence) => {
     try {
       if (!newPresence?.member || newPresence.member.user.bot) return;
@@ -17,7 +17,7 @@ export function registerSpotifyTracker(client, getConfig) {
       const current = spotifyMessages.get(newPresence.userId);
       if (current?.trackId === spotify.syncId) return;
 
-      const channelId = getConfig().musicChannelId;
+      const channelId = config.musicChannelId;
       if (!channelId) return;
 
       const channel = await client.channels.fetch(channelId);

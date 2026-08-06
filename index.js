@@ -402,7 +402,7 @@ client.on("guildMemberAdd", async (member) => {
   }
 });
 
-registerSpotifyTracker(client, () => config);
+registerSpotifyTracker(client, config);
 
 client.login(process.env.DISCORD_TOKEN).catch((e) => {
   console.error("LOGIN FAILED:", e?.message || e);
