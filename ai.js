@@ -3,9 +3,8 @@ import Groq from "groq-sdk";
 /** @type {import("groq-sdk").default[]} */
 let groqClients = [];
 
-/** key index -> timestamp until which we skip this key (after 429) */
 const keyCooldownUntil = new Map();
-const KEY_COOLDOWN_MS = 45_000; // skip a rate-limited key for 45s
+const KEY_COOLDOWN_MS = 45_000;
 
 export function initAI() {
   const keys = [
@@ -13,6 +12,12 @@ export function initAI() {
     process.env.GROQ_API_KEY_2,
     process.env.GROQ_API_KEY_3,
     process.env.GROQ_API_KEY_4,
+    process.env.GROQ_API_KEY_5,
+    process.env.GROQ_API_KEY_6,
+    process.env.GROQ_API_KEY_7,
+    process.env.GROQ_API_KEY_8,
+    process.env.GROQ_API_KEY_9,
+    process.env.GROQ_API_KEY_10,
   ].filter((k) => k && k.trim());
 
   groqClients = keys.map((apiKey) => new Groq({ apiKey }));
@@ -34,11 +39,6 @@ function markKeyRateLimited(i) {
   keyCooldownUntil.set(i, Date.now() + KEY_COOLDOWN_MS);
 }
 
-/**
- * Priority order from config.models.
- * For each model, tries every Groq key that is not in cooldown.
- * Keys that return 429 are skipped for KEY_COOLDOWN_MS so we don't burn latency.
- */
 export async function ask(messages, config) {
   const models = config.models || [];
   if (models.length === 0) throw new Error("No models configured");
@@ -55,9 +55,7 @@ export async function ask(messages, config) {
     }
 
     for (let i = 0; i < groqClients.length; i++) {
-      if (keyIsCoolingDown(i)) {
-        continue; // skip without a network call
-      }
+      if (keyIsCoolingDown(i)) continue;
 
       const client = groqClients[i];
       try {
