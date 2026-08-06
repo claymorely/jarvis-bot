@@ -3,6 +3,10 @@ import Groq from "groq-sdk";
 /** @type {import("groq-sdk").default[]} */
 let groqClients = [];
 
+/** key index -> timestamp until which we skip this key (after 429) */
+const keyCooldownUntil = new Map();
+const KEY_COOLDOWN_MS = 45_000; // skip a rate-limited key for 45s
+
 export function initAI() {
   const keys = [
     process.env.GROQ_API_KEY,
@@ -12,6 +16,7 @@ export function initAI() {
   ].filter((k) => k && k.trim());
 
   groqClients = keys.map((apiKey) => new Groq({ apiKey }));
+  keyCooldownUntil.clear();
 
   if (groqClients.length === 0) {
     console.warn("No GROQ_API_KEY* set — AI will not work");
@@ -20,9 +25,19 @@ export function initAI() {
   }
 }
 
+function keyIsCoolingDown(i) {
+  const until = keyCooldownUntil.get(i) || 0;
+  return Date.now() < until;
+}
+
+function markKeyRateLimited(i) {
+  keyCooldownUntil.set(i, Date.now() + KEY_COOLDOWN_MS);
+}
+
 /**
  * Priority order from config.models.
- * For provider "groq", tries every available key before moving to the next model.
+ * For each model, tries every Groq key that is not in cooldown.
+ * Keys that return 429 are skipped for KEY_COOLDOWN_MS so we don't burn latency.
  */
 export async function ask(messages, config) {
   const models = config.models || [];
@@ -40,6 +55,10 @@ export async function ask(messages, config) {
     }
 
     for (let i = 0; i < groqClients.length; i++) {
+      if (keyIsCoolingDown(i)) {
+        continue; // skip without a network call
+      }
+
       const client = groqClients[i];
       try {
         const completion = await client.chat.completions.create({
@@ -59,6 +78,7 @@ export async function ask(messages, config) {
           status === 429 ||
           (status >= 500 && status < 600)
         ) {
+          if (status === 429) markKeyRateLimited(i);
           console.warn(
             `Groq key#${i + 1} model ${model} failed (${status}), trying next...`
           );
