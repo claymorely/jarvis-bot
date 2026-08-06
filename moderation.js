@@ -4,8 +4,9 @@ import {
   getLastBotMessage,
   clearLastBotMessage,
   setLastBotMessage,
-  CHAT_EDITABLE_KEYS,
+  getEditableKeys,
   saveConfig,
+  markUserEdited,
 } from "./utils.js";
 
 export async function sendReply(message, text) {
@@ -63,8 +64,9 @@ export async function handleModerationCommands(message, content, lower, config, 
   if (isStaff && setMatch) {
     const key = setMatch[1];
     const value = Number(setMatch[2]);
-    if (CHAT_EDITABLE_KEYS.includes(key)) {
+    if (getEditableKeys(config).includes(key)) {
       config[key] = value;
+      markUserEdited(config, key);
       saveConfig(config);
       await sendReply(message, `Set ${key} to ${value}.`);
     } else {

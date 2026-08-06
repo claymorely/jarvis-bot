@@ -9,7 +9,8 @@ import {
   isFridayEnabled,
   setFridayEnabled,
   saveConfig,
-  CHAT_EDITABLE_KEYS,
+  getEditableKeys,
+  markUserEdited,
 } from "./utils.js";
 import { getGroqKeyCount } from "./ai.js";
 
@@ -32,11 +33,8 @@ export function buildSlashCommands() {
       .addStringOption((o) =>
         o
           .setName("key")
-          .setDescription("Which setting")
+          .setDescription("Which setting (see /getconfig)")
           .setRequired(true)
-          .addChoices(
-            ...CHAT_EDITABLE_KEYS.map((k) => ({ name: k, value: k }))
-          )
       )
       .addStringOption((o) =>
         o.setName("value").setDescription("New value (number)").setRequired(true)
@@ -44,6 +42,14 @@ export function buildSlashCommands() {
     new SlashCommandBuilder()
       .setName("getconfig")
       .setDescription("Show current runtime settings (owner only)"),
+    new SlashCommandBuilder()
+      .setName("addrole")
+      .setDescription("Add a role to the role whitelist (owner only)")
+      .addStringOption((o) => o.setName("role").setDescription("Role name").setRequired(true)),
+    new SlashCommandBuilder()
+      .setName("removerole")
+      .setDescription("Remove a role from the role whitelist (owner only)")
+      .addStringOption((o) => o.setName("role").setDescription("Role name").setRequired(true)),
     new SlashCommandBuilder()
       .setName("say")
       .setDescription("Make Friday say something (owner only)")
@@ -140,7 +146,7 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     const name = interaction.commandName;
     const ephemeral = { flags: MessageFlags.Ephemeral };
 
-    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "setconfig", "getconfig", "say", "friday"];
+    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "setconfig", "getconfig", "addrole", "removerole", "say", "friday"];
     const staffOnly = ["clear", "mute", "unmute", "warn", "purge"];
 
     if (ownerOnly.includes(name) && rank !== "OWNER") {
@@ -222,10 +228,14 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
       }
 
       if (name === "setconfig") {
-        const key = interaction.options.getString("key", true);
+        const key = interaction.options.getString("key", true).trim();
         const raw = interaction.options.getString("value", true).trim();
-        if (!CHAT_EDITABLE_KEYS.includes(key)) {
-          await interaction.reply({ content: `"${key}" can't be changed through chat.`, ...ephemeral });
+        const cfg = getConfig();
+        if (!getEditableKeys(cfg).includes(key)) {
+          await interaction.reply({
+            content: `"${key}" isn't an editable number. Run /getconfig to see available keys.`,
+            ...ephemeral,
+          });
           return;
         }
         const value = Number(raw);
@@ -233,9 +243,9 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
           await interaction.reply({ content: "Value must be a number.", ...ephemeral });
           return;
         }
-        const old = getConfig()[key];
-        const cfg = getConfig();
+        const old = cfg[key];
         cfg[key] = value;
+        markUserEdited(cfg, key);
         saveConfig(cfg);
         await interaction.reply({
           content: `Set ${key}: ${old} -> ${value}.`,
@@ -246,9 +256,54 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
 
       if (name === "getconfig") {
         const cfg = getConfig();
-        const lines = CHAT_EDITABLE_KEYS.map((k) => `${k} = ${cfg[k]}`).join("\n");
+        const lines = Object.entries(cfg)
+          .filter(([k]) => k !== "userEditedKeys")
+          .map(([k, v]) => {
+            const val = typeof v === "string" ? v : JSON.stringify(v);
+            return `${k} = ${val.length > 80 ? val.slice(0, 80) + "…" : val}`;
+          })
+          .join("\n");
         await interaction.reply({
           content: `Current settings:\n\`\`\`\n${lines}\n\`\`\``,
+          ...ephemeral,
+        });
+        return;
+      }
+
+      if (name === "addrole") {
+        const role = interaction.options.getString("role", true).trim();
+        const cfg = getConfig();
+        const whitelist = cfg.roleWhitelist || [];
+        if (whitelist.some((r) => r.toLowerCase() === role.toLowerCase())) {
+          await interaction.reply({ content: `"${role}" is already whitelisted.`, ...ephemeral });
+          return;
+        }
+        whitelist.push(role);
+        cfg.roleWhitelist = whitelist;
+        markUserEdited(cfg, "roleWhitelist");
+        saveConfig(cfg);
+        await interaction.reply({
+          content: `Whitelisted "${role}".`,
+          ...ephemeral,
+        });
+        return;
+      }
+
+      if (name === "removerole") {
+        const role = interaction.options.getString("role", true).trim();
+        const cfg = getConfig();
+        const before = (cfg.roleWhitelist || []).length;
+        cfg.roleWhitelist = (cfg.roleWhitelist || []).filter(
+          (r) => r.toLowerCase() !== role.toLowerCase()
+        );
+        if (cfg.roleWhitelist.length === before) {
+          await interaction.reply({ content: `"${role}" isn't in the whitelist.`, ...ephemeral });
+          return;
+        }
+        markUserEdited(cfg, "roleWhitelist");
+        saveConfig(cfg);
+        await interaction.reply({
+          content: `Removed "${role}" from the whitelist.`,
           ...ephemeral,
         });
         return;

@@ -30,16 +30,6 @@ export const DEFAULT_CONFIG = {
   specialTones: {},
 };
 
-export const CHAT_EDITABLE_KEYS = [
-  "cooldownMs",
-  "globalWindowMs",
-  "globalMaxCalls",
-  "muteDefaultMinutes",
-  "muteMaxMinutes",
-  "lastMessagesDefault",
-  "memoryMaxTurns",
-];
-
 export const MAX_REPLY = 600;
 export const GAP_MS = 1200;
 export const WELCOME_CARD_COLORS = ["#43B581", "#B08D57", "#FFFFFF", "#5865F2", "#EB459E", "#FAA61A"];
@@ -115,26 +105,45 @@ const lastBotMessageIds = new Map();
 let globalCallTimestamps = [];
 let fridayEnabled = true;
 
+const MERGE_UNION_KEYS = ["ownerIds", "modIds"];
+const MERGE_SKIP_KEYS = ["userEditedKeys"];
+
 function ensureConfigFile() {
   if (DATA_DIR === "." || fs.existsSync(CONFIG_PATH)) {
     if (DATA_DIR !== "." && fs.existsSync(CONFIG_PATH) && fs.existsSync(BUNDLED_CONFIG_PATH)) {
       try {
         const vol = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
         const bundled = JSON.parse(fs.readFileSync(BUNDLED_CONFIG_PATH, "utf8"));
-        const merge = (a, b) => [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])])];
-        const ownerIds = merge(vol.ownerIds, bundled.ownerIds);
-        const modIds = merge(vol.modIds, bundled.modIds);
-        if (
-          ownerIds.length !== (vol.ownerIds || []).length ||
-          modIds.length !== (vol.modIds || []).length
-        ) {
-          vol.ownerIds = ownerIds;
-          vol.modIds = modIds;
+        const userEdited = new Set(Array.isArray(vol.userEditedKeys) ? vol.userEditedKeys : []);
+        let changed = false;
+
+        // ownerIds/modIds: union merge (never removed on deploy)
+        for (const key of MERGE_UNION_KEYS) {
+          const merged = [
+            ...new Set([...(Array.isArray(vol[key]) ? vol[key] : []), ...(Array.isArray(bundled[key]) ? bundled[key] : [])]),
+          ];
+          if (merged.length !== (Array.isArray(vol[key]) ? vol[key].length : 0)) {
+            vol[key] = merged;
+            changed = true;
+          }
+        }
+
+        // everything else: bundled wins unless the user changed it via Discord
+        for (const [key, value] of Object.entries(bundled)) {
+          if (MERGE_UNION_KEYS.includes(key) || MERGE_SKIP_KEYS.includes(key)) continue;
+          if (userEdited.has(key)) continue;
+          if (JSON.stringify(vol[key]) !== JSON.stringify(value)) {
+            vol[key] = JSON.parse(JSON.stringify(value));
+            changed = true;
+          }
+        }
+
+        if (changed) {
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(vol, null, 2));
-          console.log("Merged owner/mod IDs from bundled config into", CONFIG_PATH);
+          console.log("Merged bundled config values into", CONFIG_PATH);
         }
       } catch (e) {
-        console.error("Failed to merge owner/mod IDs into config.json:", e.message);
+        console.error("Failed to merge config.json:", e.message);
       }
     }
     return;
@@ -163,12 +172,25 @@ export function loadConfig() {
   }
 }
 
+// Any numeric key in the live config is editable via Discord (works for future keys automatically).
+export function getEditableKeys(config) {
+  return Object.entries(config)
+    .filter(([k, v]) => typeof v === "number")
+    .map(([k]) => k);
+}
+
 export function saveConfig(config) {
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
   } catch (e) {
     console.error("Failed to save config.json:", e.message);
   }
+}
+
+// Mark a key as user-overridden so the boot merge never overwrites it from bundled config.
+export function markUserEdited(config, key) {
+  if (!Array.isArray(config.userEditedKeys)) config.userEditedKeys = [];
+  if (!config.userEditedKeys.includes(key)) config.userEditedKeys.push(key);
 }
 
 export function loadSystemPrompt() {
