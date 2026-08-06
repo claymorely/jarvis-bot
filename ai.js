@@ -63,7 +63,7 @@ export async function ask(messages, config) {
       try {
         const completion = await client.chat.completions.create({
           model,
-          max_tokens: 220,
+          max_tokens: 140,
           temperature: 0.8,
           messages,
         });
