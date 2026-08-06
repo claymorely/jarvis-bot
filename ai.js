@@ -4,6 +4,7 @@ import Groq from "groq-sdk";
 let groqClients = [];
 
 const keyCooldownUntil = new Map();
+const badKeys = new Set();
 const KEY_COOLDOWN_MS = 45_000;
 
 export function initAI() {
@@ -23,6 +24,7 @@ export function initAI() {
 
   groqClients = keys.map((apiKey) => new Groq({ apiKey }));
   keyCooldownUntil.clear();
+  badKeys.clear();
 
   if (groqClients.length === 0) {
     console.warn("No GROQ_API_KEY* set — AI will not work");
@@ -37,6 +39,10 @@ function keyIsCoolingDown(i) {
 
 function markKeyRateLimited(i) {
   keyCooldownUntil.set(i, Date.now() + KEY_COOLDOWN_MS);
+}
+
+function keyIsBad(i) {
+  return badKeys.has(i);
 }
 
 export function getGroqKeyCount() {
@@ -58,7 +64,7 @@ export async function ask(messages, config) {
     }
 
     for (let i = 0; i < groqClients.length; i++) {
-      if (keyIsCoolingDown(i)) continue;
+      if (keyIsCoolingDown(i) || keyIsBad(i)) continue;
 
       try {
         const completion = await groqClients[i].chat.completions.create({
@@ -73,12 +79,21 @@ export async function ask(messages, config) {
         const status = e?.status || e?.response?.status || e?.statusCode;
         if (
           status === 400 ||
+          status === 401 ||
+          status === 403 ||
           status === 404 ||
           status === 402 ||
           status === 429 ||
           (status >= 500 && status < 600)
         ) {
-          if (status === 429) markKeyRateLimited(i);
+          if (status === 429) {
+            markKeyRateLimited(i);
+          } else if (status === 401 || status === 403) {
+            badKeys.add(i);
+            console.error(
+              `Groq key#${i + 1} is invalid or unauthorized (${status}), disabling it for this process`
+            );
+          }
           console.warn(
             `Groq key#${i + 1} model ${model} failed (${status}), trying next...`
           );
