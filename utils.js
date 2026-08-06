@@ -296,6 +296,7 @@ const WIKI_GENERIC_TERMS = new Set([
   "breed", "breeding", "damage", "spawn", "spawning", "drops", "drop", "craft", "crafting",
   "build", "make", "use", "used", "tame", "feed", "trade", "trading", "farm", "farming",
   "kill", "die", "death", "find", "rate", "best", "get", "block", "blocks",
+  "give", "gives", "gave", "charged", "fully", "made", "cost", "costs", "take", "takes",
 ]);
 const WIKI_UA = { "User-Agent": "jarvis-bot/1.0 (Discord bot)" };
 const WIKI_SIZE_QUESTION =
@@ -328,7 +329,7 @@ async function wikiPrefixSearch(q) {
 
 async function collectWikiCandidates(query) {
   const keywords = wikiKeywords(query);
-  const tokens = (keywords || "").split(" ").filter((t) => t.length > 2);
+  const tokens = (keywords || "").split(" ").filter((t) => t.length > 2 && !WIKI_GENERIC_TERMS.has(t));
   const phraseQs = [...new Set([keywords, tokens.slice(-2).join(" ")].filter(Boolean))];
 
   const cands = [];
