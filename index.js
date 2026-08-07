@@ -41,7 +41,7 @@ import { initAI, ask } from "./ai.js";
 import { registerFont, generateWelcomeCard } from "./welcome.js";
 import { handleModerationCommands, sendReply } from "./moderation.js";
 import { registerSpotifyTracker } from "./spotify.js";
-import { registerSlashCommands, createInteractionHandler, buildStatusText } from "./slash.js";
+import { registerSlashCommands, createInteractionHandler, buildStatusText, runWhoami } from "./slash.js";
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
@@ -293,6 +293,30 @@ client.on("messageCreate", async (message) => {
 
     const handled = await handleModerationCommands(message, content, lower, config, displayName);
     if (handled) return;
+
+    if (named && /\bfriday\s+whoami\b/i.test(lower)) {
+      if (!globalRateLimitOk(config)) {
+        await sendReply(message, "Too many requests right now, give it a few seconds.");
+        return;
+      }
+      try {
+        const reply = await runWhoami({
+          user: message.author,
+          member: message.member || null,
+          rank,
+          config,
+          loadSystemPrompt,
+          ask,
+          clean,
+          MAX_REPLY,
+        });
+        await sendReply(message, reply);
+      } catch (e) {
+        console.error("whoami error:", e.message);
+        await sendReply(message, "Something broke on my end.");
+      }
+      return;
+    }
 
     if (rank === "OWNER" && /\bfriday\s+internet\b/i.test(lower)) {
       await sendReply(message, "fuck you internet");

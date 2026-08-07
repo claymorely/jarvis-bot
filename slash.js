@@ -13,11 +13,16 @@ import {
   markUserEdited,
   unmarkUserEdited,
   readBundledConfig,
+  globalRateLimitOk,
+  checkCooldown,
+  getSpecialTone,
 } from "./utils.js";
 import { getGroqKeyCount, getGroqKeyStatuses } from "./ai.js";
 
 export function buildSlashCommands() {
   return [
+    new SlashCommandBuilder().setName("help").setDescription("Show/list/explain Friday's commands"),
+    new SlashCommandBuilder().setName("whoami").setDescription("Tell you your rank, known-player entry, and tone"),
     new SlashCommandBuilder().setName("memory").setDescription("List permanent memory (owner only)"),
     new SlashCommandBuilder()
       .setName("remember")
@@ -131,6 +136,19 @@ export async function registerSlashCommands(client) {
       console.error(`Failed to register slash commands for ${guildId}:`, e.message);
     }
   }
+
+  try {
+    await rest.put(Routes.applicationCommands(appId), {
+      body: [
+        new SlashCommandBuilder()
+          .setName("whoami")
+          .setDescription("Tell you your rank, known-player entry, and tone"),
+      ].map((c) => c.toJSON()),
+    });
+    console.log("Global slash commands registered");
+  } catch (e) {
+    console.error("Failed to register global slash commands:", e.message);
+  }
 }
 
 async function purgeMessages(channel, count, onlyFriday, botId) {
@@ -176,6 +194,82 @@ export function buildStatusText({ client, cfg, facts }) {
     lines.push(`Key #${s.index + 1}: disabled (invalid/unauthorized)`);
   }
   return lines.join("\n");
+}
+
+const HELP_COMMANDS = [
+  { name: "help", desc: "Show/list/explain Friday's commands", level: 0 },
+  { name: "whoami", desc: "Tell you your rank, known-player entry, and tone", level: 0 },
+  { name: "ask", desc: "Ask Friday a one-off question (no chat history)", level: 0 },
+  { name: "clear", desc: "Clear short-term chat history in this channel", level: 1 },
+  { name: "mute", desc: "Timeout a member", level: 1 },
+  { name: "unmute", desc: "Remove timeout", level: 1 },
+  { name: "warn", desc: "Warn a member publicly", level: 1 },
+  { name: "purge", desc: "Delete recent messages in this channel", level: 1 },
+  { name: "memory", desc: "List permanent memory", level: 2 },
+  { name: "remember", desc: "Save a permanent fact", level: 2 },
+  { name: "resetmemory", desc: "Forget one or more permanent facts, or 'all'", level: 2 },
+  { name: "status", desc: "Bot status", level: 2 },
+  { name: "setconfig", desc: "Change a runtime setting", level: 2 },
+  { name: "resetconfig", desc: "Restore a key (or 'all') from the GitHub config", level: 2 },
+  { name: "getconfig", desc: "Show current runtime settings", level: 2 },
+  { name: "addrole", desc: "Add a role to the role whitelist", level: 2 },
+  { name: "removerole", desc: "Remove a role from the role whitelist", level: 2 },
+  { name: "say", desc: "Make Friday say something", level: 2 },
+  { name: "friday", desc: "Turn Friday on or off", level: 2 },
+];
+
+export function buildHelpText(rank) {
+  const maxLevel = rank === "OWNER" ? 2 : rank === "MOD" ? 1 : 0;
+  const lines = HELP_COMMANDS.filter((c) => c.level <= maxLevel).map(
+    (c) => `/${c.name} — ${c.desc}`
+  );
+  return `**Friday commands** (${rank} access):\n${lines.join("\n")}`;
+}
+
+function findKnownPlayerEntry(displayName, systemPrompt) {
+  const m = systemPrompt.match(/KNOWN PLAYERS[^\n]*\n([^\n]+)/);
+  if (!m) return null;
+  const entries = m[1]
+    .split(";")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  const name = displayName.toLowerCase();
+  return (
+    entries.find(
+      (e) => e.split(/\s+/)[0]?.toLowerCase() === name || e.toLowerCase().includes(name)
+    ) || null
+  );
+}
+
+export async function runWhoami({ user, member, rank, config, loadSystemPrompt, ask, clean, MAX_REPLY }) {
+  const display = member?.displayName || user.username;
+  const roles = member?.roles?.cache
+    ? member.roles.cache.map((r) => r.name).filter((n) => n !== "@everyone").join(", ") || "none"
+    : "none";
+  const joined = member?.joinedAt ? member.joinedAt.toDateString() : "unknown";
+  const toneKey = getSpecialTone(user.id, config);
+  const systemPrompt = loadSystemPrompt();
+  const knownEntry = findKnownPlayerEntry(display, systemPrompt);
+  const context = [
+    `[WHOAMI] This is the user who ran the command.`,
+    `Name: ${display}`,
+    `Rank: ${rank}`,
+    `Server roles: ${roles}`,
+    `Joined: ${joined}`,
+    `Special tone: ${toneKey || "none"}`,
+    knownEntry ? `KNOWN PLAYERS entry: "${knownEntry}"` : "KNOWN PLAYERS entry: none found",
+    ``,
+    `Give this user a WHO AM I? answer: their rank, their known-player entry if they have one, and their special tone.`,
+    `Keep it to 1-2 sentences. If they have no known-player entry, say so honestly.`,
+  ].join("\n");
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: context },
+  ];
+  const completion = await ask(messages, config);
+  let reply = clean(completion.choices[0]?.message?.content || "") || "..?";
+  if (reply.length > MAX_REPLY) reply = reply.slice(0, MAX_REPLY) + "…";
+  return reply;
 }
 
 export function createInteractionHandler({ client, getConfig, ask, loadSystemPrompt, clean, MAX_REPLY }) {
@@ -245,6 +339,44 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     }
 
     try {
+      if (name === "help") {
+        await interaction.reply({ content: buildHelpText(rank), ...ephemeral });
+        return;
+      }
+
+      if (name === "whoami") {
+        if (!isFridayEnabled()) {
+          await interaction.reply({ content: "Friday is offline.", ...ephemeral });
+          return;
+        }
+        if (!checkCooldown(interaction.user.id, config)) {
+          await interaction.reply({ content: "Slow down — whoami is rate-limited.", ...ephemeral });
+          return;
+        }
+        if (!globalRateLimitOk(config)) {
+          await interaction.reply({ content: "Too many requests right now, give it a few seconds.", ...ephemeral });
+          return;
+        }
+        await interaction.deferReply();
+        try {
+          const reply = await runWhoami({
+            user: interaction.user,
+            member: interaction.member || null,
+            rank,
+            config,
+            loadSystemPrompt,
+            ask,
+            clean,
+            MAX_REPLY,
+          });
+          await interaction.editReply(reply);
+        } catch (e) {
+          console.error("whoami error:", e.message);
+          await interaction.editReply("Something broke on my end.");
+        }
+        return;
+      }
+
       if (name === "memory") {
         const facts = loadPermanentMemory();
         if (facts.length === 0) {
