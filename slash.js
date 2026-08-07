@@ -24,10 +24,15 @@ export function buildSlashCommands() {
       .setDescription("Save a permanent fact (owner only)")
       .addStringOption((o) => o.setName("fact").setDescription("Fact to remember").setRequired(true)),
     new SlashCommandBuilder()
-      .setName("forget")
-      .setDescription("Forget a fact by number, range (1-15), or text (owner only)")
-      .addStringOption((o) => o.setName("query").setDescription("Number, range, or text").setRequired(true)),
-    new SlashCommandBuilder().setName("resetmemory").setDescription("Wipe permanent memory (owner only)"),
+      .setName("resetmemory")
+      .setDescription("Forget one or more permanent facts, or 'all' (owner only)")
+      .addStringOption((o) =>
+        o
+          .setName("fact")
+          .setDescription("Fact number, range (1-3), text, or 'all'")
+          .setRequired(true)
+          .setAutocomplete(true)
+      ),
     new SlashCommandBuilder().setName("status").setDescription("Bot status (owner only)"),
     new SlashCommandBuilder()
       .setName("setconfig")
@@ -178,6 +183,22 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
         await interaction.respond(choices);
         return;
       }
+      if (name === "resetmemory" && focused.name === "fact") {
+        const facts = loadPermanentMemory();
+        const choices = facts
+          .map((f, i) => ({ label: `${i + 1}. ${f}`, value: String(i + 1) }))
+          .filter((c) => c.label.toLowerCase().includes(query) || c.value === query)
+          .slice(0, 24)
+          .map((c) => ({
+            name: c.label.length > 100 ? c.label.slice(0, 100) : c.label,
+            value: c.value,
+          }));
+        if ("all".includes(query)) {
+          choices.unshift({ name: "all (forget everything)", value: "all" });
+        }
+        await interaction.respond(choices);
+        return;
+      }
       return;
     }
 
@@ -188,7 +209,7 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     const name = interaction.commandName;
     const ephemeral = { flags: MessageFlags.Ephemeral };
 
-    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "setconfig", "resetconfig", "getconfig", "addrole", "removerole", "say", "friday"];
+    const ownerOnly = ["memory", "remember", "resetmemory", "status", "setconfig", "resetconfig", "getconfig", "addrole", "removerole", "say", "friday"];
     const staffOnly = ["clear", "mute", "unmute", "warn", "purge"];
 
     if (ownerOnly.includes(name) && rank !== "OWNER") {
@@ -229,12 +250,30 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
         return;
       }
 
-      if (name === "forget") {
-        const query = interaction.options.getString("query", true);
-        const result = removePermanentFact(query);
+      if (name === "resetmemory") {
+        const raw = interaction.options.getString("fact", true).trim();
+        if (raw.toLowerCase() === "all") {
+          const facts = loadPermanentMemory();
+          if (facts.length === 0) {
+            await interaction.reply({ content: "Permanent memory is already empty.", ...ephemeral });
+            return;
+          }
+          clearPermanentMemory();
+          await interaction.reply({
+            content: `Forgot ${facts.length} fact(s) — permanent memory wiped.`,
+            ...ephemeral,
+          });
+          return;
+        }
+        const result = removePermanentFact(raw);
         if (!result.ok) {
-          await interaction.reply({ content: "Couldn't find that.", ...ephemeral });
-        } else if (result.range) {
+          await interaction.reply({
+            content: "Couldn't find that. Use /memory to see the numbered facts.",
+            ...ephemeral,
+          });
+          return;
+        }
+        if (result.range) {
           await interaction.reply({
             content: `Forgot ${result.removed.length} fact(s).`,
             ...ephemeral,
@@ -243,12 +282,6 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
           const r = Array.isArray(result.removed) ? result.removed[0] : result.removed;
           await interaction.reply({ content: `Forgot: ${r}`, ...ephemeral });
         }
-        return;
-      }
-
-      if (name === "resetmemory") {
-        clearPermanentMemory();
-        await interaction.reply({ content: "Permanent memory wiped.", ...ephemeral });
         return;
       }
 
