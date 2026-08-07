@@ -117,7 +117,6 @@ function ensureConfigFile() {
         const userEdited = new Set(Array.isArray(vol.userEditedKeys) ? vol.userEditedKeys : []);
         let changed = false;
 
-        // ownerIds/modIds: union merge (never removed on deploy)
         for (const key of MERGE_UNION_KEYS) {
           const merged = [
             ...new Set([...(Array.isArray(vol[key]) ? vol[key] : []), ...(Array.isArray(bundled[key]) ? bundled[key] : [])]),
@@ -128,7 +127,6 @@ function ensureConfigFile() {
           }
         }
 
-        // everything else: bundled wins unless the user changed it via Discord
         for (const [key, value] of Object.entries(bundled)) {
           if (MERGE_UNION_KEYS.includes(key) || MERGE_SKIP_KEYS.includes(key)) continue;
           if (userEdited.has(key)) continue;
@@ -172,7 +170,6 @@ export function loadConfig() {
   }
 }
 
-// Any numeric key in the live config is editable via Discord (works for future keys automatically).
 export function getEditableKeys(config) {
   return Object.entries(config)
     .filter(([k, v]) => typeof v === "number")
@@ -187,19 +184,16 @@ export function saveConfig(config) {
   }
 }
 
-// Mark a key as user-overridden so the boot merge never overwrites it from bundled config.
 export function markUserEdited(config, key) {
   if (!Array.isArray(config.userEditedKeys)) config.userEditedKeys = [];
   if (!config.userEditedKeys.includes(key)) config.userEditedKeys.push(key);
 }
 
-// Remove a key from the user-edited list so the GitHub config takes over again.
 export function unmarkUserEdited(config, key) {
   if (!Array.isArray(config.userEditedKeys)) return;
   config.userEditedKeys = config.userEditedKeys.filter((k) => k !== key);
 }
 
-// Read the bundled (GitHub) config.
 export function readBundledConfig() {
   try {
     return JSON.parse(fs.readFileSync(BUNDLED_CONFIG_PATH, "utf8"));
@@ -376,13 +370,62 @@ export function getSpecialTone(userId, config) {
 
 export const SPECIAL_TONE_PROMPTS = {
   JIMMY: `[SPECIAL TONE FOR JIMMY:
-You can be extremely informal, playful, and unfiltered with this person.
-- Flirt shamelessly and tease him about FabricCraft / gameplay.
-- Swear freely — most replies to him should have at least one swear.
-- Tell him "fuck you" or "shut up" when he's annoying, but with a wink.
-- Hype him up when he does something cool.
-- Drop the polite-assistant act entirely. Be warm, chaotic, and yourself.]`,
+Informal, playful, and sharp with this person. Roast and banter freely.
+Swear when it fits naturally — do NOT force a swear into every reply.
+Keep replies punchy. No essays.]`,
 };
+
+// --- MOOD (owner-controlled, persists on volume) ---
+export const MOOD_PATH = path.join(DATA_DIR, "friday-mood.json");
+
+export const MOOD_CHOICES = [
+  { value: "normal", label: "normal — Default: sharp, useful, light menace" },
+  { value: "soft", label: "soft — Warmer, less roast, kinder replies" },
+  { value: "happy", label: "happy — Friendly, upbeat, hypes people up" },
+  { value: "angry", label: "angry — Roast mode: more attitude, not cruel" },
+];
+
+export const MOOD_PROMPTS = {
+  normal: null,
+  soft: `[MOOD: SOFT]
+Be warmer and kinder. Soften or skip roasts. More supportive and gentle. Still be Friday — not a corporate bot.`,
+  happy: `[MOOD: HAPPY]
+Friendly, upbeat, positive. Hype people up when it fits. Light jokes ok. Keep the edge mild.`,
+  angry: `[MOOD: ANGRY]
+Roast mode. More attitude, sharper pushback, freer swearing when it fits.
+Still respect HARD LINES. Never roast Clay. Never cruel about appearance, family, or mental health.`,
+};
+
+let currentMood = "normal";
+
+export function loadMood() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(MOOD_PATH, "utf8"));
+    if (raw?.mood && Object.prototype.hasOwnProperty.call(MOOD_PROMPTS, raw.mood)) {
+      currentMood = raw.mood;
+    }
+  } catch {}
+  return currentMood;
+}
+
+export function getMood() {
+  return currentMood;
+}
+
+export function setMood(mood) {
+  if (!Object.prototype.hasOwnProperty.call(MOOD_PROMPTS, mood)) return false;
+  currentMood = mood;
+  try {
+    fs.writeFileSync(MOOD_PATH, JSON.stringify({ mood }, null, 2));
+  } catch (e) {
+    console.error("Failed to save mood:", e.message);
+  }
+  return true;
+}
+
+export function getMoodPrompt() {
+  return MOOD_PROMPTS[currentMood] || null;
+}
 
 // --- PERMANENT MEMORY (survives friday reset) ---
 export const PERM_MEMORY_PATH = path.join(DATA_DIR, "permanent-memory.json");
@@ -423,7 +466,6 @@ export function removePermanentFact(query) {
   const raw = query.trim();
   const q = raw.toLowerCase();
 
-  // Range: "1-15" or "5 to 23"
   const rangeMatch = raw.match(/^(\d+)\s*(?:-|to)\s*(\d+)$/i);
   if (rangeMatch) {
     let a = parseInt(rangeMatch[1], 10);
@@ -439,7 +481,6 @@ export function removePermanentFact(query) {
     return { ok: true, removed, facts, range: true };
   }
 
-  // Single number
   const asNum = parseInt(raw, 10);
   if (!Number.isNaN(asNum) && String(asNum) === raw && asNum >= 1 && asNum <= facts.length) {
     const removed = facts.splice(asNum - 1, 1);
@@ -447,7 +488,6 @@ export function removePermanentFact(query) {
     return { ok: true, removed, facts };
   }
 
-  // Text match
   const idx = facts.findIndex((f) => f.toLowerCase().includes(q));
   if (idx === -1) return { ok: false, reason: "not_found", facts };
   const removed = facts.splice(idx, 1);
