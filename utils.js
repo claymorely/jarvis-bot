@@ -193,6 +193,22 @@ export function markUserEdited(config, key) {
   if (!config.userEditedKeys.includes(key)) config.userEditedKeys.push(key);
 }
 
+// Remove a key from the user-edited list so the GitHub config takes over again.
+export function unmarkUserEdited(config, key) {
+  if (!Array.isArray(config.userEditedKeys)) return;
+  config.userEditedKeys = config.userEditedKeys.filter((k) => k !== key);
+}
+
+// Read the bundled (GitHub) config.
+export function readBundledConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(BUNDLED_CONFIG_PATH, "utf8"));
+  } catch (e) {
+    console.error("Failed to read bundled config:", e.message);
+    return null;
+  }
+}
+
 export function loadSystemPrompt() {
   try {
     return fs.readFileSync(SYSTEM_PROMPT_PATH, "utf8").trim();

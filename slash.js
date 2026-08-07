@@ -11,6 +11,8 @@ import {
   saveConfig,
   getEditableKeys,
   markUserEdited,
+  unmarkUserEdited,
+  readBundledConfig,
 } from "./utils.js";
 import { getGroqKeyCount } from "./ai.js";
 
@@ -35,9 +37,20 @@ export function buildSlashCommands() {
           .setName("key")
           .setDescription("Which setting (see /getconfig)")
           .setRequired(true)
+          .setAutocomplete(true)
       )
       .addStringOption((o) =>
         o.setName("value").setDescription("New value (number)").setRequired(true)
+      ),
+    new SlashCommandBuilder()
+      .setName("resetconfig")
+      .setDescription("Restore a key (or 'all') from the GitHub config (owner only)")
+      .addStringOption((o) =>
+        o
+          .setName("key")
+          .setDescription("Key name or 'all'")
+          .setRequired(true)
+          .setAutocomplete(true)
       ),
     new SlashCommandBuilder()
       .setName("getconfig")
@@ -139,6 +152,35 @@ async function purgeMessages(channel, count, onlyFriday, botId) {
 
 export function createInteractionHandler({ client, getConfig, ask, loadSystemPrompt, clean, MAX_REPLY }) {
   return async function onInteraction(interaction) {
+    if (interaction.isAutocomplete()) {
+      const cfg = getConfig();
+      const rank = rankOf(interaction.user, cfg);
+      if (rank !== "OWNER") return;
+      const name = interaction.commandName;
+      const focused = interaction.options.getFocused(true);
+      const query = focused.value.toLowerCase();
+      if (name === "setconfig" && focused.name === "key") {
+        const choices = getEditableKeys(cfg)
+          .filter((k) => k.toLowerCase().includes(query))
+          .slice(0, 25)
+          .map((k) => ({ name: `${k} (current: ${cfg[k]})`, value: k }));
+        await interaction.respond(choices);
+        return;
+      }
+      if (name === "resetconfig" && focused.name === "key") {
+        const edited = new Set(Array.isArray(cfg.userEditedKeys) ? cfg.userEditedKeys : []);
+        const choices = ["all", ...Object.keys(cfg)]
+          .filter((k) => k !== "userEditedKeys")
+          .filter((k) => k === "all" || edited.has(k))
+          .filter((k) => k.toLowerCase().includes(query))
+          .slice(0, 25)
+          .map((k) => ({ name: k === "all" ? "all (reset everything)" : `${k}`, value: k }));
+        await interaction.respond(choices);
+        return;
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
 
     const config = getConfig();
@@ -146,7 +188,7 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     const name = interaction.commandName;
     const ephemeral = { flags: MessageFlags.Ephemeral };
 
-    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "setconfig", "getconfig", "addrole", "removerole", "say", "friday"];
+    const ownerOnly = ["memory", "remember", "forget", "resetmemory", "status", "setconfig", "resetconfig", "getconfig", "addrole", "removerole", "say", "friday"];
     const staffOnly = ["clear", "mute", "unmute", "warn", "purge"];
 
     if (ownerOnly.includes(name) && rank !== "OWNER") {
@@ -254,13 +296,65 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
         return;
       }
 
+      if (name === "resetconfig") {
+        const key = interaction.options.getString("key", true).trim();
+        const cfg = getConfig();
+        const edited = Array.isArray(cfg.userEditedKeys) ? cfg.userEditedKeys : [];
+        const bundled = readBundledConfig();
+
+        if (key.toLowerCase() === "all") {
+          if (edited.length === 0) {
+            await interaction.reply({ content: "Nothing to reset — no keys were edited via Discord.", ...ephemeral });
+            return;
+          }
+          const keys = edited.filter((k) => k !== "userEditedKeys");
+          for (const k of keys) {
+            if (bundled && k in bundled) {
+              cfg[k] = JSON.parse(JSON.stringify(bundled[k]));
+            } else {
+              delete cfg[k];
+            }
+            unmarkUserEdited(cfg, k);
+          }
+          saveConfig(cfg);
+          await interaction.reply({
+            content: `Reset ${keys.length} key(s) back to GitHub config.`,
+            ...ephemeral,
+          });
+          return;
+        }
+
+        if (!edited.includes(key)) {
+          await interaction.reply({
+            content: `"${key}" isn't user-edited — nothing to reset.`,
+            ...ephemeral,
+          });
+          return;
+        }
+        const old = cfg[key];
+        if (bundled && key in bundled) {
+          cfg[key] = JSON.parse(JSON.stringify(bundled[key]));
+        } else {
+          delete cfg[key];
+        }
+        unmarkUserEdited(cfg, key);
+        saveConfig(cfg);
+        await interaction.reply({
+          content: `Reset ${key}: ${JSON.stringify(old)} -> ${JSON.stringify(cfg[key])}.`,
+          ...ephemeral,
+        });
+        return;
+      }
+
       if (name === "getconfig") {
         const cfg = getConfig();
+        const edited = new Set(Array.isArray(cfg.userEditedKeys) ? cfg.userEditedKeys : []);
         const lines = Object.entries(cfg)
           .filter(([k]) => k !== "userEditedKeys")
           .map(([k, v]) => {
             const val = typeof v === "string" ? v : JSON.stringify(v);
-            return `${k} = ${val.length > 80 ? val.slice(0, 80) + "…" : val}`;
+            const marker = edited.has(k) ? " (Discord-set)" : "";
+            return `${k} = ${val.length > 80 ? val.slice(0, 80) + "…" : val}${marker}`;
           })
           .join("\n");
         await interaction.reply({
