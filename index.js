@@ -317,7 +317,25 @@ client.on("messageCreate", async (message) => {
 
     const history = getMemory(message.channel.id);
     const tag = `[${rank}]`;
-    const userLine = `${tag} [display name: ${displayName}] says: ${content}`;
+
+    // Resolve mentions to names so the model knows who/what was referenced
+    let resolvedContent = content;
+    const mentions = new Map();
+    for (const [id, user] of message.mentions.users) {
+      const label = user.bot ? `${user.username} (bot)` : user.username;
+      mentions.set(`<@${id}>`, `@${label}`);
+      mentions.set(`<@!${id}>`, `@${label}`);
+    }
+    for (const [id, role] of message.mentions.roles) {
+      mentions.set(`<@&${id}>`, `@${role.name} (role)`);
+    }
+    for (const [id, channel] of message.mentions.channels) {
+      mentions.set(`<#${id}>`, `#${channel.name}`);
+    }
+    for (const [token, label] of mentions) {
+      resolvedContent = resolvedContent.split(token).join(label);
+    }
+    const userLine = `${tag} [display name: ${displayName}] says: ${resolvedContent}`;
 
     const messages = [{ role: "system", content: loadSystemPrompt() }, ...history];
 
