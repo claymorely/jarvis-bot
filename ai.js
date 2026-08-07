@@ -81,7 +81,7 @@ export async function ask(messages, config) {
       try {
         const completion = await groqClients[i].chat.completions.create({
           model,
-          max_tokens: 80,
+          max_tokens: 150,
           temperature: 0.75,
           messages,
         });
