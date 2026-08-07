@@ -49,6 +49,18 @@ export function getGroqKeyCount() {
   return groqClients.length;
 }
 
+// Live per-key state for status reporting. Reads current cooldowns/bad-key flags,
+// so it always reflects the latest state when called.
+export function getGroqKeyStatuses() {
+  const now = Date.now();
+  return groqClients.map((_, i) => {
+    if (keyIsBad(i)) return { index: i, state: "disabled" };
+    const until = keyCooldownUntil.get(i) || 0;
+    if (now < until) return { index: i, state: "rateLimited", resumeInMs: until - now };
+    return { index: i, state: "active" };
+  });
+}
+
 export async function ask(messages, config) {
   const models = config.models || [];
   if (models.length === 0) throw new Error("No models configured");

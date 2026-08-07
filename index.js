@@ -41,7 +41,7 @@ import { initAI, ask } from "./ai.js";
 import { registerFont, generateWelcomeCard } from "./welcome.js";
 import { handleModerationCommands, sendReply } from "./moderation.js";
 import { registerSpotifyTracker } from "./spotify.js";
-import { registerSlashCommands, createInteractionHandler } from "./slash.js";
+import { registerSlashCommands, createInteractionHandler, buildStatusText } from "./slash.js";
 
 process.on("unhandledRejection", (e) => console.error("UNHANDLED REJECTION:", e));
 process.on("uncaughtException", (e) => console.error("UNCAUGHT EXCEPTION:", e));
@@ -268,6 +268,17 @@ client.on("messageCreate", async (message) => {
             const text = list.length > 1800 ? list.slice(0, 1800) + "…" : list;
             await message.author.send(`Permanent memory:\n${text}`);
           }
+          await sendReply(message, "Sent you a DM.");
+        } catch {
+          await sendReply(message, "Couldn't DM you — open your DMs.");
+        }
+        return;
+      }
+
+      if (/\bstatus\b/i.test(lower) && !/\breset\b/i.test(lower)) {
+        const facts = loadPermanentMemory();
+        try {
+          await message.author.send(buildStatusText({ client, cfg: config, facts }));
           await sendReply(message, "Sent you a DM.");
         } catch {
           await sendReply(message, "Couldn't DM you — open your DMs.");

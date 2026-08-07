@@ -14,7 +14,7 @@ import {
   unmarkUserEdited,
   readBundledConfig,
 } from "./utils.js";
-import { getGroqKeyCount } from "./ai.js";
+import { getGroqKeyCount, getGroqKeyStatuses } from "./ai.js";
 
 export function buildSlashCommands() {
   return [
@@ -155,6 +155,29 @@ async function purgeMessages(channel, count, onlyFriday, botId) {
   return deleted;
 }
 
+export function buildStatusText({ client, cfg, facts }) {
+  const statuses = getGroqKeyStatuses();
+  const active = statuses.filter((s) => s.state === "active").length;
+  const rateLimited = statuses.filter((s) => s.state === "rateLimited");
+  const disabled = statuses.filter((s) => s.state === "disabled");
+  const lines = [
+    `Friday: ${isFridayEnabled() ? "ON" : "OFF"}`,
+    `Groq keys: ${getGroqKeyCount()} (${active} active, ${rateLimited.length} rate-limited, ${disabled.length} disabled)`,
+    `Permanent facts: ${facts.length}`,
+    `Guilds: ${client.guilds.cache.size}`,
+    `Cooldown: ${cfg.cooldownMs}ms`,
+    `Rate limit: ${cfg.globalMaxCalls} calls / ${cfg.globalWindowMs}ms`,
+  ];
+  for (const s of rateLimited) {
+    const secs = Math.max(1, Math.round(s.resumeInMs / 1000));
+    lines.push(`Key #${s.index + 1}: rate-limited, resumes in ~${secs}s`);
+  }
+  for (const s of disabled) {
+    lines.push(`Key #${s.index + 1}: disabled (invalid/unauthorized)`);
+  }
+  return lines.join("\n");
+}
+
 export function createInteractionHandler({ client, getConfig, ask, loadSystemPrompt, clean, MAX_REPLY }) {
   return async function onInteraction(interaction) {
     if (interaction.isAutocomplete()) {
@@ -289,14 +312,7 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
         const facts = loadPermanentMemory();
         const cfg = getConfig();
         await interaction.reply({
-          content: [
-            `Friday: ${isFridayEnabled() ? "ON" : "OFF"}`,
-            `Groq keys: ${getGroqKeyCount()}`,
-            `Permanent facts: ${facts.length}`,
-            `Guilds: ${client.guilds.cache.size}`,
-            `Cooldown: ${cfg.cooldownMs}ms`,
-            `Rate limit: ${cfg.globalMaxCalls} calls / ${cfg.globalWindowMs}ms`,
-          ].join("\n"),
+          content: buildStatusText({ client, cfg, facts }),
           ...ephemeral,
         });
         return;
