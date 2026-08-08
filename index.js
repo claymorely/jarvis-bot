@@ -36,6 +36,10 @@ import {
   removePermanentFact,
   clearPermanentMemory,
   formatPermanentMemoryForPrompt,
+  loadMood,
+  getMood,
+  setMood,
+  getMoodPrompt,
 } from "./utils.js";
 
 import { initAI, ask } from "./ai.js";
@@ -58,6 +62,7 @@ if (!process.env.GROQ_API_KEY) {
 
 let config = loadConfig();
 initAI();
+loadMood();
 registerFont();
 
 fs.watchFile(CONFIG_PATH, { interval: 2000 }, () => {
@@ -166,6 +171,16 @@ client.on("messageCreate", async (message) => {
     if (named && owner && /\bfriday\s+on\b/i.test(lower)) {
       setFridayEnabled(true);
       await sendReply(message, pick(ON_LINES));
+      return;
+    }
+    if (named && rank === "OWNER" && /\bfriday\s+mood\b/i.test(lower)) {
+      const moodMatch = lower.match(/\bfriday\s+mood\s+(normal|soft|happy|angry)\b/);
+      if (!moodMatch) {
+        await sendReply(message, `Current mood: **${getMood()}**. Use: friday mood normal|soft|happy|angry`);
+        return;
+      }
+      setMood(moodMatch[1]);
+      await sendReply(message, `Mood set to **${moodMatch[1]}**.`);
       return;
     }
     if (!isFridayEnabled()) return;
@@ -379,6 +394,11 @@ client.on("messageCreate", async (message) => {
     const permNote = formatPermanentMemoryForPrompt();
     if (permNote) {
       messages.push({ role: "system", content: permNote });
+    }
+
+    const moodNote = getMoodPrompt();
+    if (moodNote) {
+      messages.push({ role: "system", content: moodNote });
     }
 
     if (MINECRAFT_KEYWORDS.test(lower)) {

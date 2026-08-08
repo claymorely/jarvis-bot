@@ -17,6 +17,11 @@ import {
   globalRateLimitOk,
   checkCooldown,
   getSpecialTone,
+  getMood,
+  setMood,
+  loadMood,
+  getMoodPrompt,
+  MOOD_CHOICES,
 } from "./utils.js";
 import { getGroqKeyCount, getGroqKeyStatuses } from "./ai.js";
 
@@ -87,6 +92,21 @@ export function buildSlashCommands() {
           .setDescription("on or off")
           .setRequired(true)
           .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" })
+      ),
+    new SlashCommandBuilder()
+      .setName("mood")
+      .setDescription("Set Friday's mood (owner only)")
+      .addStringOption((o) =>
+        o
+          .setName("mode")
+          .setDescription("Which mood")
+          .setRequired(true)
+          .addChoices(
+            { name: "normal — Default: sharp, useful, light menace", value: "normal" },
+            { name: "soft — Warmer, less roast, kinder replies", value: "soft" },
+            { name: "happy — Friendly, upbeat, hypes people up", value: "happy" },
+            { name: "angry — Roast mode: more attitude, not cruel", value: "angry" }
+          )
       ),
     new SlashCommandBuilder()
       .setName("clear")
@@ -181,6 +201,7 @@ export function buildStatusText({ client, cfg, facts }) {
   const disabled = statuses.filter((s) => s.state === "disabled");
   const lines = [
     `Friday: ${isFridayEnabled() ? "ON" : "OFF"}`,
+    `Mood: ${getMood()}`,
     `Groq keys: ${getGroqKeyCount()} (${active} active, ${rateLimited.length} rate-limited, ${disabled.length} disabled)`,
     `Permanent facts: ${facts.length}`,
     `Guilds: ${client.guilds.cache.size}`,
@@ -217,6 +238,7 @@ const HELP_COMMANDS = [
   { name: "removerole", desc: "Remove a role from the role whitelist", level: 2 },
   { name: "say", desc: "Make Friday say something", level: 2 },
   { name: "friday", desc: "Turn Friday on or off", level: 2 },
+  { name: "mood", desc: "Set Friday's mood (normal/soft/happy/angry)", level: 2 },
 ];
 
 export function buildHelpText(rank, isOwnerAccess = false) {
@@ -228,18 +250,30 @@ export function buildHelpText(rank, isOwnerAccess = false) {
 }
 
 function findKnownPlayerEntry(displayName, systemPrompt) {
-  const m = systemPrompt.match(/KNOWN PLAYERS[^\n]*\n([^\n]+)/);
-  if (!m) return null;
-  const entries = m[1]
-    .split(";")
-    .map((e) => e.trim())
-    .filter(Boolean);
-  const name = displayName.toLowerCase();
-  return (
-    entries.find(
-      (e) => e.split(/\s+/)[0]?.toLowerCase() === name || e.toLowerCase().includes(name)
-    ) || null
+  const section = systemPrompt.match(
+    /KNOWN PLAYERS[^\n]*\n([\s\S]*?)(?=\nWHO AM I\?|\nNO HELP WITH|\n[A-Z][A-Z /]{3,}:|$)/i
   );
+  if (!section) return null;
+  const lines = section[1]
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && (l.includes("—") || l.includes("-")));
+  const raw = displayName.toLowerCase();
+  const name = raw.replace(/[^a-z0-9_]/g, "");
+  for (const line of lines) {
+    const head = line.split(/—|-/)[0].toLowerCase();
+    const aliases = [...head.matchAll(/\(([^)]+)\)/g)].map((m) =>
+      m[1].toLowerCase().replace(/[^a-z0-9_]/g, "")
+    );
+    const primary = head.split("(")[0].trim().replace(/[^a-z0-9_]/g, "");
+    if (primary && (name.includes(primary) || primary.includes(name) || raw.includes(primary))) {
+      return line;
+    }
+    if (aliases.some((a) => a && (name.includes(a) || a.includes(name) || raw.includes(a)))) {
+      return line;
+    }
+  }
+  return null;
 }
 
 export async function runWhoami({ user, member, rank, config, loadSystemPrompt, ask, clean, MAX_REPLY }) {
@@ -261,7 +295,7 @@ export async function runWhoami({ user, member, rank, config, loadSystemPrompt, 
     knownEntry ? `KNOWN PLAYERS entry: "${knownEntry}"` : "KNOWN PLAYERS entry: none found",
     ``,
     `Give this user a WHO AM I? answer: their rank, their known-player entry if they have one, and their special tone.`,
-    `Keep it to 1-2 sentences. If they have no known-player entry, say so honestly.`,
+    `If they have a known-player entry, use it and write 2-4 positive sentences. If none, say so honestly in 1 sentence.`,
   ].join("\n");
   const messages = [
     { role: "system", content: systemPrompt },
@@ -327,7 +361,7 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     const name = interaction.commandName;
     const ephemeral = { flags: MessageFlags.Ephemeral };
 
-    const ownerOnly = ["memory", "remember", "resetmemory", "status", "setconfig", "resetconfig", "getconfig", "addrole", "removerole", "say", "friday"];
+    const ownerOnly = ["memory", "remember", "resetmemory", "status", "setconfig", "resetconfig", "getconfig", "addrole", "removerole", "say", "friday", "mood"];
     const staffOnly = ["clear", "mute", "unmute", "warn", "purge"];
 
     if (ownerOnly.includes(name) && !hasOwnerAccess(interaction.user, config)) {
@@ -607,6 +641,25 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
         return;
       }
 
+      if (name === "mood") {
+        const mode = interaction.options.getString("mode", true);
+        if (!setMood(mode)) {
+          await interaction.reply({ content: "Unknown mood.", ...ephemeral });
+          return;
+        }
+        const labels = {
+          normal: "normal — sharp, useful, light menace",
+          soft: "soft — warmer, less roast",
+          happy: "happy — friendly, upbeat",
+          angry: "angry — roast mode",
+        };
+        await interaction.reply({
+          content: `Mood set to **${labels[mode] || mode}**.`,
+          ...ephemeral,
+        });
+        return;
+      }
+
       if (name === "clear") {
         clearMemory(interaction.channelId);
         await interaction.reply({ content: "Chat history cleared for this channel.", ...ephemeral });
@@ -627,6 +680,8 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
           { role: "system", content: loadSystemPrompt() },
           { role: "user", content: userLine },
         ];
+        const moodNote = getMoodPrompt();
+        if (moodNote) messages.splice(1, 0, { role: "system", content: moodNote });
         try {
           const completion = await ask(messages, config);
           let reply = clean(completion.choices[0]?.message?.content || "") || "..?";
