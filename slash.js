@@ -1,6 +1,7 @@
 import { REST, Routes, SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from "discord.js";
 import {
   rankOf,
+  hasOwnerAccess,
   loadPermanentMemory,
   addPermanentFact,
   removePermanentFact,
@@ -218,8 +219,8 @@ const HELP_COMMANDS = [
   { name: "friday", desc: "Turn Friday on or off", level: 2 },
 ];
 
-export function buildHelpText(rank) {
-  const maxLevel = rank === "OWNER" ? 2 : rank === "MOD" ? 1 : 0;
+export function buildHelpText(rank, isOwnerAccess = false) {
+  const maxLevel = isOwnerAccess ? 2 : rank === "OWNER" ? 2 : rank === "MOD" ? 1 : 0;
   const lines = HELP_COMMANDS.filter((c) => c.level <= maxLevel).map(
     (c) => `/${c.name} — ${c.desc}`
   );
@@ -277,7 +278,7 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     if (interaction.isAutocomplete()) {
       const cfg = getConfig();
       const rank = rankOf(interaction.user, cfg);
-      if (rank !== "OWNER") return;
+      if (!hasOwnerAccess(interaction.user, cfg)) return;
       const name = interaction.commandName;
       const focused = interaction.options.getFocused(true);
       const query = focused.value.toLowerCase();
@@ -329,18 +330,21 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
     const ownerOnly = ["memory", "remember", "resetmemory", "status", "setconfig", "resetconfig", "getconfig", "addrole", "removerole", "say", "friday"];
     const staffOnly = ["clear", "mute", "unmute", "warn", "purge"];
 
-    if (ownerOnly.includes(name) && rank !== "OWNER") {
+    if (ownerOnly.includes(name) && !hasOwnerAccess(interaction.user, config)) {
       await interaction.reply({ content: "Owner only.", ...ephemeral });
       return;
     }
-    if (staffOnly.includes(name) && rank !== "OWNER" && rank !== "MOD") {
+    if (staffOnly.includes(name) && !hasOwnerAccess(interaction.user, config) && rank !== "MOD") {
       await interaction.reply({ content: "Staff only.", ...ephemeral });
       return;
     }
 
     try {
       if (name === "help") {
-        await interaction.reply({ content: buildHelpText(rank), ...ephemeral });
+        await interaction.reply({
+          content: buildHelpText(rank, hasOwnerAccess(interaction.user, config)),
+          ...ephemeral,
+        });
         return;
       }
 
@@ -637,10 +641,10 @@ export function createInteractionHandler({ client, getConfig, ask, loadSystemPro
       if (name === "purge") {
         const count = interaction.options.getInteger("count", true);
         const onlyFriday = interaction.options.getBoolean("only_friday") || false;
-        const max = rank === "OWNER" ? 500 : 10;
+        const max = hasOwnerAccess(interaction.user, config) ? 500 : 10;
         if (count > max) {
           await interaction.reply({
-            content: rank === "OWNER" ? `Max is ${max}.` : "Mods can delete at most 10.",
+            content: hasOwnerAccess(interaction.user, config) ? `Max is ${max}.` : "Mods can delete at most 10.",
             ...ephemeral,
           });
           return;

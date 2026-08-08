@@ -5,6 +5,7 @@ import {
   loadConfig,
   loadSystemPrompt,
   rankOf,
+  hasOwnerAccess,
   sanitizeName,
   flagImpersonation,
   getMemory,
@@ -148,6 +149,7 @@ client.on("messageCreate", async (message) => {
     }
 
     const rank = rankOf(message.author, config);
+    const owner = hasOwnerAccess(message.author, config);
     const username = message.author.username;
     const rawDisplayName = message.member?.displayName || username;
     const displayName = flagImpersonation(sanitizeName(rawDisplayName), rank);
@@ -156,12 +158,12 @@ client.on("messageCreate", async (message) => {
       message.mentions.has(client.user) ||
       config.triggers.some((t) => new RegExp(`\\b${t}\\b`, "i").test(lower));
 
-    if (named && rank === "OWNER" && /\bfriday\s+off\b/i.test(lower)) {
+    if (named && owner && /\bfriday\s+off\b/i.test(lower)) {
       setFridayEnabled(false);
       await sendReply(message, pick(OFF_LINES));
       return;
     }
-    if (named && rank === "OWNER" && /\bfriday\s+on\b/i.test(lower)) {
+    if (named && owner && /\bfriday\s+on\b/i.test(lower)) {
       setFridayEnabled(true);
       await sendReply(message, pick(ON_LINES));
       return;
@@ -169,7 +171,7 @@ client.on("messageCreate", async (message) => {
     if (!isFridayEnabled()) return;
 
     if (named && /\breset\b/i.test(lower) && !/\breset\s+memory\b/i.test(lower)) {
-      if (rank === "OWNER" || rank === "MOD") {
+      if (owner || rank === "MOD") {
         clearMemory(message.channel.id);
         await sendReply(message, "Chat history cleared. Permanent memory is untouched.");
       } else {
@@ -179,7 +181,7 @@ client.on("messageCreate", async (message) => {
     }
 
     // Purge / delete last N
-    if (named && (rank === "OWNER" || rank === "MOD")) {
+    if (named && (owner || rank === "MOD")) {
       const selfPurge = content.match(
         /\b(?:delete|purge)\s+(?:your|my|friday(?:'s)?)\s+(?:last\s+)?(\d+)\b/i
       );
@@ -189,7 +191,7 @@ client.on("messageCreate", async (message) => {
       if (selfPurge || allPurge) {
         const onlyFriday = !!selfPurge;
         const n = parseInt((selfPurge || allPurge)[1], 10);
-        const max = rank === "OWNER" ? 500 : 10;
+        const max = owner ? 500 : 10;
         if (!n || n < 1) {
           await sendReply(message, "Give me a number.");
           return;
@@ -197,7 +199,7 @@ client.on("messageCreate", async (message) => {
         if (n > max) {
           await sendReply(
             message,
-            rank === "OWNER" ? `Cap is ${max}.` : "Mods can delete at most 10."
+            owner ? `Cap is ${max}.` : "Mods can delete at most 10."
           );
           return;
         }
@@ -223,7 +225,7 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    if (named && rank === "OWNER") {
+    if (named && owner) {
       if (/\breset\s+memory\b/i.test(lower)) {
         clearPermanentMemory();
         await sendReply(message, "Permanent memory wiped.");
@@ -318,13 +320,13 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    if (rank === "OWNER" && /\bfriday\s+internet\b/i.test(lower)) {
+    if (owner && /\bfriday\s+internet\b/i.test(lower)) {
       await sendReply(message, "fuck you internet");
       return;
     }
 
     const relayMatch = content.match(/friday\s+(?:say|tell\s+(?:him|her|them))\s+(.+)/i);
-    if (rank === "OWNER" && relayMatch) {
+    if (owner && relayMatch) {
       const toSay = relayMatch[1].trim();
       if (toSay) {
         await sendReply(message, toSay);

@@ -14,6 +14,7 @@ export const DEFAULT_CONFIG = {
   musicChannelId: "",
   ownerIds: [],
   modIds: [],
+  modOverrideIds: [],
   pingBlockUserIds: [],
   cooldownMs: 8000,
   globalWindowMs: 10000,
@@ -229,9 +230,14 @@ export function logViolation(kind, username, content) {
 }
 
 export function rankOf(author, config) {
+  if (config.modOverrideIds?.includes(author.id)) return "MOD";
   if (config.ownerIds.includes(author.id)) return "OWNER";
   if (config.modIds.includes(author.id)) return "MOD";
   return "MEMBER";
+}
+
+export function hasOwnerAccess(author, config) {
+  return config.ownerIds.includes(author.id);
 }
 
 export function sanitizeName(raw, fallback = "a member") {

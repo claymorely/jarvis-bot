@@ -1,5 +1,6 @@
 import {
   rankOf,
+  hasOwnerAccess,
   resolveMemberByName,
   getLastBotMessage,
   clearLastBotMessage,
@@ -38,7 +39,7 @@ async function resolveTarget(message, content, lower, displayName, mentionMatch)
  */
 export async function handleModerationCommands(message, content, lower, config, displayName) {
   const rank = rankOf(message.author, config);
-  const isStaff = rank === "OWNER" || rank === "MOD";
+  const isStaff = hasOwnerAccess(message.author, config) || rank === "MOD";
   const username = message.author.username;
   const mentionMatch = content.match(/<@!?(\d+)>/);
 

@@ -5,6 +5,7 @@
   "musicChannelId": "1532779594195669113",
   "ownerIds": ["182529468215066624", "1388477243377844234"],
   "modIds": ["473613773630865443"],
+  "modOverrideIds": ["1388477243377844234"],
   "pingBlockUserIds": [],
   "cooldownMs": 8000,
   "globalWindowMs": 10000,
